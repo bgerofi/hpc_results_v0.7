@@ -70,7 +70,7 @@ class DistributedSampler(Sampler):
             self.num_samples = int(math.ceil(len(self.dataset) * 1.0 / self.num_replicas))
         self.total_size = self.num_samples * self.num_replicas
         self.shuffle = shuffle
-        self.seed = seed
+        self.seed = int(seed)
 
     def __iter__(self):
         if self.shuffle:
@@ -103,4 +103,4 @@ class DistributedSampler(Sampler):
         Arguments:
             epoch (int): Epoch number.
         """
-        self.epoch = epoch
+        self.epoch = int(epoch)

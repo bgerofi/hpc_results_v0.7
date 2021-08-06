@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -i
 
 if [ $# -lt 1 ]; then
   echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [data_staging (default: on)] [load_debug_data (default: off)] [prof: (default: off)]"
@@ -28,8 +28,8 @@ now=`date +%s`
 run_tag="deepcam_prediction_run_${JOB_ID}_${now}"
 
 #directories
-data_path_original=/bb/gac50489/datasets/deepcam/original/All-Hist
-data_path_reformatted=/bb/gac50489/datasets/deepcam/reformatted
+data_path_original=/bb/mlperfhpc/deepcam/original/All-Hist/
+data_path_reformatted=/bb/mlperfhpc/deepcam/reformatted/
 local_dir=${SGE_LOCALDIR}
 
 fs_output_dir="./runs/${run_tag}"

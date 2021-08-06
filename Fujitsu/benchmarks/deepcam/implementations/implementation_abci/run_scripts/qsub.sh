@@ -26,8 +26,8 @@ if [ $# -gt 3 ]; then
 else
   prof=0
 fi
-group_id="gca50115"
-runtime="0:40:00"
+group_id="gcb50300"
+runtime="0:30:00"
 
 log_time=`date +%s`
 log_dir=logs

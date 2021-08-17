@@ -71,6 +71,7 @@ if [ ${local_rank} -eq 0 ]; then
       fi
       for file_idx in `seq ${start_idx} ${end_idx}`; do
         train_data=${data_path}/${num_nodes}/train_${num_nodes}_$((${file_idx} + 1)).tar
+        echo "rank: $rank is staging: ${train_data} as file_idx: ${file_idx} from [${start_idx}, ${end_idx}]..."
         tar xf ${train_data} -C ${train_local_dir}
       done
     fi
@@ -90,6 +91,7 @@ if [ ${local_rank} -eq 0 ]; then
       fi
       for file_idx in `seq ${start_idx} ${end_idx}`; do
         validation_data=${data_path}/${num_nodes}/validation_${num_nodes}_$((${file_idx} + 1)).tar
+        echo "rank: $rank is staging: ${validation_data} as file_idx: ${file_idx} from [${start_idx}, ${end_idx}]..."
         tar xf ${validation_data} -C ${validation_local_dir}
       done
     fi

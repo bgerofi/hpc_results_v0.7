@@ -27,7 +27,7 @@ else
   prof=0
 fi
 group_id="gcb50300"
-runtime="0:30:00"
+runtime="1:00:00"
 
 log_time=`date +%s`
 log_dir=logs

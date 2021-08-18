@@ -29,7 +29,8 @@ run_tag="deepcam_prediction_run_${JOB_ID}_${now}"
 
 #directories
 data_path_original=/bb/mlperfhpc/deepcam/original/All-Hist/
-data_path_reformatted=/bb/mlperfhpc/deepcam/reformatted/
+#data_path_reformatted=/bb/mlperfhpc/deepcam/reformatted/
+data_path_reformatted=/groups/gcb50300/DeepCAM/128GB/reformatted/
 local_dir=${SGE_LOCALDIR}
 
 fs_output_dir="./runs/${run_tag}"

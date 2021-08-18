@@ -69,6 +69,7 @@ from PIL import Image
 from utils import visualizer as vizc
 
 #DDP
+#from mpi4py import MPI
 import torch.distributed as dist
 try:
     from apex import amp
@@ -128,6 +129,10 @@ def main(pargs):
     comm_size = dist.get_world_size() 
     comm_node_id = comm_rank // comm_local_size
 
+    #print("comm_size: {}, comm_rank: {}, MPI size: {}, MPI rank: {}".format(
+    #    comm_size, comm_rank, MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()))
+    #sys.exit(0)
+
     if comm_rank == 0:
         print(pargs)
 
@@ -157,10 +162,17 @@ def main(pargs):
         train_dir = os.path.join(root_dir, "train")
     else:
         train_dir = os.path.join(pargs.train_data_dir_prefix)
+    if pargs.stage_dir is not None:
+        train_dir = os.path.join(train_dir, str(comm_rank))
+
     if pargs.validation_data_dir_prefix == '/':
         validation_dir = os.path.join(root_dir, "validation")
     else:
         validation_dir = os.path.join(pargs.validation_data_dir_prefix)
+    if pargs.stage_dir is not None:
+        validation_dir = os.path.join(validation_dir, str(comm_rank))
+
+
     output_dir = pargs.output_dir
     plot_dir = os.path.join(output_dir, "plots")
     if comm_rank == 0:
@@ -344,10 +356,11 @@ def main(pargs):
     if pargs.stage_dir is not None:
         logger.log_start(key = "staging_start", sync = True)
 
+        # data_staging.sh takes care of rank inclusion into folder names
         if pargs.debug:
-            staging_command='./data_staging.sh {} {} {} {}'.format(pargs.data_dir_prefix, pargs.stage_dir, pargs.local_rank, pargs.debug)
+            staging_command='./data_staging.sh {} {} {} {} {} {}'.format(pargs.data_dir_prefix, pargs.stage_dir, comm_rank, comm_size, pargs.local_rank, pargs.debug)
         else:
-            staging_command='./data_staging.sh {} {} {}'.format(pargs.data_dir_prefix, pargs.stage_dir, pargs.local_rank)
+            staging_command='./data_staging.sh {} {} {} {} {}'.format(pargs.data_dir_prefix, pargs.stage_dir, comm_rank, comm_size, pargs.local_rank)
 
         staging_ret = sp.run(staging_command, shell=True).returncode
         if staging_ret != 0:
@@ -355,31 +368,21 @@ def main(pargs):
 
         logger.log_end(key = "staging_stop", sync = True)
 
-        local_train_dir = os.path.join(pargs.stage_dir, "train")
+        local_train_dir = os.path.join(pargs.stage_dir, "train", str(comm_rank))
         num_local_train_samples_ = torch.Tensor([len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])]).to(device)
         dist.all_reduce(num_local_train_samples_, op=dist.ReduceOp.MAX)
         num_local_train_samples = num_local_train_samples_.long().item()
 
-        local_validation_dir = os.path.join(pargs.stage_dir, "validation")
+        local_validation_dir = os.path.join(pargs.stage_dir, "validation", str(comm_rank))
         num_local_validation_samples = len([ x for x in os.listdir(local_validation_dir) if x.endswith('.h5') ])
 
     else:
         num_local_train_samples = pargs.num_global_train_samples
         num_local_validation_samples = pargs.num_global_validation_samples
 
-    num_train_data_shards = pargs.num_train_data_shards
-    if num_train_data_shards == 1:
-        train_dataset_comm_rank = 0
-    elif num_train_data_shards == comm_local_size:
-        train_dataset_comm_rank = comm_local_rank
-    elif num_train_data_shards == comm_size:
-        train_dataset_comm_rank = comm_rank
-    elif num_train_data_shards % comm_local_size == 0:
-        num_nodes_in_shards = num_train_data_shards // comm_local_size
-        train_dataset_comm_rank = comm_local_rank + (comm_node_id % num_nodes_in_shards) * comm_local_size
-    else:
-        print("num_train_data_shards", num_train_data_shards, "is not supported.")
-        sys.exit()
+    # Only one shard (data is local to each rank)
+    num_train_data_shards = 1
+    train_dataset_comm_rank = 0
 
     if pargs.max_inter_threads == 0:
         timeout = 0
@@ -425,21 +428,8 @@ def main(pargs):
                               drop_last = train_drop_last,
                               timeout = timeout)
 
-    num_validation_data_shards = pargs.num_validation_data_shards
-    if num_validation_data_shards != 1 and num_validation_data_shards != comm_local_size \
-       and num_validation_data_shards != comm_size:
-        print("num_validation_data_shards", num_validation_data_shards, "is not supported.")
-        sys.exit()
-
-    if num_validation_data_shards == 1:
-        validation_dataset_comm_rank = 0
-    elif num_validation_data_shards == comm_local_size:
-        validation_dataset_comm_rank = comm_local_rank
-    elif num_validation_data_shards == comm_size:
-        validation_dataset_comm_rank = comm_rank
-    else:
-        print("num_validation_data_shards", num_validation_data_shards, "is not supported.")
-        sys.exit()
+    num_validation_data_shards = 1
+    validation_dataset_comm_rank = 0
 
     validation_allow_uneven_distribution = True
     if pargs.dummy:

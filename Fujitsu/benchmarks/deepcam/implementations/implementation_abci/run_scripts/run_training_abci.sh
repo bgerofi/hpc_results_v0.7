@@ -6,23 +6,27 @@ if [ $# -lt 1 ]; then
   exit 1
 fi
 
-. ~/miniconda3/etc/profile.d/conda.sh
-conda activate py37-pytorch
+#. ~/miniconda3/etc/profile.d/conda.sh
+#conda activate py37-pytorch
+#
+#. /etc/profile.d/modules.sh
+#
+#module load gcc/7.4.0
+#module load openmpi/2.1.6
+#module load cuda/10.2/10.2.89
+#module load cudnn/7.6/7.6.5
+#module load nccl/2.7/2.7.8-1
+#
+#export CUDA_HOME=/apps/cuda/10.2.89
+#export CUDNN_LIB_DIR=/apps/cudnn/7.6.5/cuda10.2
+#export CUDNN_INCLUDE_DIR=$CUDNN_LIB_DIR/include
+#export CUDNN_LIBRARY=$CUDNN_LIB_DIR/lib64
 
-. /etc/profile.d/modules.sh
 
-module load gcc/7.4.0
-module load openmpi/2.1.6
-module load cuda/10.2/10.2.89
-module load cudnn/7.6/7.6.5
-module load nccl/2.7/2.7.8-1
-
-export CUDA_HOME=/apps/cuda/10.2.89
-export CUDNN_LIB_DIR=/apps/cudnn/7.6.5/cuda10.2
-export CUDNN_INCLUDE_DIR=$CUDNN_LIB_DIR/include
-export CUDNN_LIBRARY=$CUDNN_LIB_DIR/lib64
-
-
+source /etc/profile.d/modules.sh
+module purge
+module load gcc/9.3.0 python/3.8/3.8.7 openmpi/4.0.5 cuda/11.1/11.1.1 cudnn/8.0/8.0.5 nccl/2.8/2.8.4-1
+source ~/venv/python-3.8.7+pytorch-1.8.1+horovod-0.22.0/bin/activate
 
 echo "job_id: ${JOB_ID}"
 
@@ -100,7 +104,7 @@ fi
 
 
 #mpi options
-mpioptions="-mca pml ob1 -mca btl ^openib -mca btl_tcp_if_include bond0"
+mpioptions="-mca pml ob1 -map-by ppr:${nproc_per_node}:node"
 
 if [ ${prof} -gt 0 ]; then
   echo "prof"
@@ -123,7 +127,7 @@ else
 fi
 
 #run the stuff
-mpirun --hostfile ${hostfile} -n ${nprocs} ${mpioptions} ./run_training_abci_launch.sh \
+mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${nproc_per_node} \
   ${data_dir_prefix} \
   ${stage_dir} \

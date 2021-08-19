@@ -69,7 +69,7 @@ from PIL import Image
 from utils import visualizer as vizc
 
 #DDP
-#from mpi4py import MPI
+from mpi4py import MPI
 import torch.distributed as dist
 try:
     from apex import amp
@@ -79,6 +79,8 @@ try:
 except ImportError:
     from torch.nn.parallel.distributed import DistributedDataParallel as DDP
     have_apex = False
+
+import horovod.torch as hvd
 
 #comm wrapper
 from utils import comm
@@ -95,7 +97,8 @@ class StoreDictKeyPair(ap.Action):
 
 
 def printr(msg, rank=0):
-    if comm.get_rank() == rank:
+    #if hvd.rank() == rank:
+    if hvd.rank() == 0:
         print(msg)
 
 
@@ -105,7 +108,19 @@ def main(pargs):
     # this should be global
     global have_wandb
 
-    #set seed
+    hvd.init()
+    comm_rank = hvd.rank()
+    comm_size = hvd.size()
+    comm_local_rank = hvd.local_rank()
+
+    # For backward compatibility of the rest of the code
+    pargs.local_rank = comm_local_rank
+    pargs.local_size = hvd.local_size()
+    #print("rank: {}, size: {}, local_rank: {}".format(comm_rank, comm_size, comm_local_rank))
+
+    MPI.COMM_WORLD.Barrier()
+
+	#set seed
     seed = pargs.seed
     
     # Some setup
@@ -117,17 +132,6 @@ def main(pargs):
         torch.cuda.set_device(device)
     else:
         device = torch.device("cpu")
-
-    #init distributed training
-    if pargs.wireup_method == "nccl-openmpi":
-        dist.init_process_group(backend = "nccl", init_method='env://')
-    else:
-        raise NotImplementedError()
-    comm_local_rank = pargs.local_rank
-    comm_local_size = pargs.local_size
-    comm_rank = dist.get_rank() 
-    comm_size = dist.get_world_size() 
-    comm_node_id = comm_rank // comm_local_size
 
     #print("comm_size: {}, comm_rank: {}, MPI size: {}, MPI rank: {}".format(
     #    comm_size, comm_rank, MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()))
@@ -145,7 +149,7 @@ def main(pargs):
     # set up logging
     pargs.logging_frequency = max([pargs.logging_frequency, 1])
     log_file = os.path.normpath(os.path.join(pargs.output_dir, "logs", pargs.run_tag + ".log"))
-    logger = mll.mlperf_logger(log_file, "deepcam", "Fujitsu")
+    logger = mll.mlperf_logger(log_file, "deepcam", "Fujitsu", comm_size=comm_size, comm_rank=comm_rank)
 
     logger.log_start(key = "init_start", sync = True)
     logger.log_event(key = "cache_clear")
@@ -266,20 +270,29 @@ def main(pargs):
     else:
         raise NotImplementedError("Error, optimizer {} not supported".format(pargs.optimizer))
 
+    # Horovod: (optional) compression algorithm.
+    #compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+    compression = hvd.Compression.none
+
+    # Horovod: wrap optimizer with DistributedOptimizer.
+    optimizer = hvd.DistributedOptimizer(optimizer,
+                                            named_parameters=net.named_parameters(),
+                                            compression=compression)
+
     if have_apex:
         #wrap model and opt into amp
         net, optimizer = amp.initialize(net, optimizer, opt_level = pargs.amp_opt_level)
 
-    #make model distributed
-    if have_apex:
-        #wrap model and opt into amp
-        if pargs.deterministic:
-            net = DDP(net, delay_allreduce = True)
-        else:
-            net = DDP(net)
-    else:
-        #torch.nn.parallel.DistributedDataParallel
-        net = DDP(net, device_ids=[pargs.local_rank], output_device=pargs.local_rank)
+    ##make model distributed
+    #if have_apex:
+    #    #wrap model and opt into amp
+    #    if pargs.deterministic:
+    #        net = DDP(net, delay_allreduce = True)
+    #    else:
+    #        net = DDP(net)
+    #else:
+    #    #torch.nn.parallel.DistributedDataParallel
+    #    net = DDP(net, device_ids=[pargs.local_rank], output_device=pargs.local_rank)
 
     #restart from checkpoint if desired
     #if (comm_rank == 0) and (pargs.checkpoint):
@@ -308,12 +321,18 @@ def main(pargs):
             scheduler = scheduler_after
         
     #broadcast model and optimizer state
-    steptens = torch.tensor(np.array([start_step, start_epoch]), requires_grad=False).to(device)
-    dist.broadcast(steptens, src = 0)
+    #steptens = torch.tensor(np.array([start_step, start_epoch]), requires_grad=False).to(device)
+    #dist.broadcast(steptens, src = 0)
+    #steptens = torch.tensor(np.array([start_step, start_epoch]), requires_grad=False)
+    #steptens = hvd.broadcast(steptens.cpu(), root_rank = 0, name='steptens').item()
     
     #unpack the bcasted tensor
-    start_step = steptens.cpu().numpy()[0]
-    start_epoch = steptens.cpu().numpy()[1]
+    #start_step = steptens.cpu().numpy()[0]
+    #start_epoch = steptens.cpu().numpy()[1]
+
+    # Horovod: broadcast parameters & optimizer state.
+    #hvd.broadcast_parameters(net.state_dict(), root_rank=0)
+    #hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
     # Logging hyperparameters
     logger.log_event(key = "global_batch_size", value = (pargs.local_batch_size * comm_size))
@@ -352,6 +371,10 @@ def main(pargs):
     logger.log_end(key = "init_stop", sync = True)
     logger.log_start(key = "run_start", sync = True)
 
+    MPI.COMM_WORLD.Barrier()
+    if hvd.rank() == 0:
+        print("Staging input data on all ranks..")
+
     # run staging
     if pargs.stage_dir is not None:
         logger.log_start(key = "staging_start", sync = True)
@@ -369,16 +392,20 @@ def main(pargs):
         logger.log_end(key = "staging_stop", sync = True)
 
         local_train_dir = os.path.join(pargs.stage_dir, "train", str(comm_rank))
-        num_local_train_samples_ = torch.Tensor([len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])]).to(device)
-        dist.all_reduce(num_local_train_samples_, op=dist.ReduceOp.MAX)
-        num_local_train_samples = num_local_train_samples_.long().item()
+        #num_local_train_samples_ = torch.Tensor([len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])]).to(device)
+        #dist.all_reduce(num_local_train_samples_, op=dist.ReduceOp.MAX)
+        #num_local_train_samples = num_local_train_samples_.long().item()
+
+        # XXX: nr. of local train samples is same across all ranks
+        num_local_train_samples_ = torch.Tensor([len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])])
+        num_local_train_samples = num_local_train_samples_
 
         local_validation_dir = os.path.join(pargs.stage_dir, "validation", str(comm_rank))
         num_local_validation_samples = len([ x for x in os.listdir(local_validation_dir) if x.endswith('.h5') ])
-
     else:
         num_local_train_samples = pargs.num_global_train_samples
         num_local_validation_samples = pargs.num_global_validation_samples
+
 
     # Only one shard (data is local to each rank)
     num_train_data_shards = 1
@@ -388,6 +415,8 @@ def main(pargs):
         timeout = 0
     else:
         timeout = 300
+    #pargs.max_inter_threads = 1
+    #timeout = 0
 
     train_allow_uneven_distribution = True
     if pargs.dummy:
@@ -399,10 +428,14 @@ def main(pargs):
     if train_drop_last == False:
         assert(num_local_train_samples % pargs.local_batch_size == 0)
 
+    MPI.COMM_WORLD.Barrier()
+    if hvd.rank() == 0:
+        print("Setting up DataLoaders on all ranks..")
+
     # Set up the data feeder
     # train
     train_set = cam.CamDataset(train_dir, 
-                               statsfile = os.path.join(root_dir, 'stats.h5'),
+                               statsfile = os.path.join(pargs.data_dir_prefix, 'stats.h5'),
                                channels = pargs.channels,
                                allow_uneven_distribution = train_allow_uneven_distribution,
                                shuffle = True, 
@@ -441,7 +474,7 @@ def main(pargs):
 
     # validation: we only want to shuffle the set if we are cutting off validation after a certain number of steps
     validation_set = cam.CamDataset(validation_dir, 
-                               statsfile = os.path.join(root_dir, 'stats.h5'),
+                               statsfile = os.path.join(pargs.data_dir_prefix, 'stats.h5'),
                                channels = pargs.channels,
                                allow_uneven_distribution = validation_allow_uneven_distribution,
                                shuffle = (pargs.max_validation_steps is not None),
@@ -539,15 +572,17 @@ def main(pargs):
 
                 # allreduce for loss
                 loss_avg = loss.detach()
-                dist.reduce(loss_avg, dst=0, op=dist.ReduceOp.SUM)
-                loss_avg_train = loss_avg.item() / float(comm_size)
+                #dist.reduce(loss_avg, dst=0, op=dist.ReduceOp.SUM)
+                #loss_avg_train = loss_avg.item() / float(comm_size)
+                loss_avg_train = hvd.allreduce(loss_avg.cpu(), name="loss_avg").item()
 
                 # Compute score
                 predictions = torch.max(outputs, 1)[1]
                 iou = utils.compute_score(predictions, label, device_id=device, num_classes=3)
                 iou_avg = iou.detach()
-                dist.reduce(iou_avg, dst=0, op=dist.ReduceOp.SUM)
-                iou_avg_train = iou_avg.item() / float(comm_size)
+                #dist.reduce(iou_avg, dst=0, op=dist.ReduceOp.SUM)
+                #iou_avg_train = iou_avg.item() / float(comm_size)
+                iou_avg_train = hvd.allreduce(iou_avg.cpu(), name="iou_avg").item()
                 
                 logger.log_event(key = "learning_rate", value = current_lr, metadata = {'epoch_num': epoch+1, 'step_num': step})
                 logger.log_event(key = "train_accuracy", value = iou_avg_train, metadata = {'epoch_num': epoch+1, 'step_num': step})
@@ -626,12 +661,18 @@ def main(pargs):
                             break
                         
                 # average the validation loss
-                dist.all_reduce(count_sum_val, op=dist.ReduceOp.SUM, async_op=False)
-                dist.reduce(loss_sum_val, dst=0, op=dist.ReduceOp.SUM)
-                dist.all_reduce(iou_sum_val, op=dist.ReduceOp.SUM, async_op=False)
-                loss_avg_val = loss_sum_val.item() / count_sum_val.item()
-                iou_avg_val = iou_sum_val.item() / count_sum_val.item()
-                
+                #dist.all_reduce(count_sum_val, op=dist.ReduceOp.SUM, async_op=False)
+                #dist.reduce(loss_sum_val, dst=0, op=dist.ReduceOp.SUM)
+                #dist.all_reduce(iou_sum_val, op=dist.ReduceOp.SUM, async_op=False)
+                #loss_avg_val = loss_sum_val.item() / count_sum_val.item()
+                #iou_avg_val = iou_sum_val.item() / count_sum_val.item()
+                count_sum_val = int(hvd.allreduce(count_sum_val.cpu(), name="count_sum_val").item()) * hvd.size()
+                loss_sum_val = float(hvd.allreduce(loss_sum_val.cpu(), name="loss_sum_val").item()) * hvd.size()
+                iou_sum_val = float(hvd.allreduce(iou_sum_val.cpu(), name="iou_sum_val").item()) * hvd.size()
+                loss_avg_val = loss_sum_val / count_sum_val
+                iou_avg_val = iou_sum_val / count_sum_val
+
+
                 # print results
                 logger.log_event(key = "eval_accuracy", value = iou_avg_val, metadata = {'epoch_num': epoch+1, 'step_num': step})
                 logger.log_event(key = "eval_loss", value = loss_avg_val, metadata = {'epoch_num': epoch+1, 'step_num': step})

@@ -32,12 +32,16 @@ from mlperf_logging import mllog
 
 #comm wrapper
 from utils import comm
+from mpi4py import MPI
 
 class mlperf_logger(object):
 
-    def __init__(self, filename, benchmark, organization, submission_log=True, comm_size=None):
+    def __init__(self, filename, benchmark, organization, submission_log=True, comm_size=None, comm_rank=None):
         self.mllogger = mllog.get_mllogger()
-        self.comm_rank = comm.get_rank()
+        if comm_rank is None:
+            self.comm_rank = comm.get_rank()
+        else:
+            self.comm_rank = comm_rank
         if comm_size is None:
             self.comm_size = comm.get_size()
         else:
@@ -51,6 +55,8 @@ class mlperf_logger(object):
                 os.makedirs(logdir)
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.barrier()
+        else:
+            MPI.COMM_WORLD.Barrier()
 
         # create config
         mllog.config(filename = filename)
@@ -122,5 +128,7 @@ class mlperf_logger(object):
         """
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.barrier()
+        else:
+            MPI.COMM_WORLD.Barrier()
 
 

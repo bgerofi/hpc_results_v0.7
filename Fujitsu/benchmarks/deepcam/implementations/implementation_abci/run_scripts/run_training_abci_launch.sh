@@ -19,40 +19,15 @@ dummy=${11}
 profile=${12}
 
 log_dir=./logs
-ip_mask="10\.1\."
-master_ip_file=${log_dir}/master_ip_${JOB_ID}
-
 mkdir -p ${output_dir}
 
 rank=`env | grep OMPI_COMM_WORLD_RANK | awk -F= '{print $2}'`
-node_id=`env | grep OMPI_COMM_WORLD_RANK | awk -F= '{print $2}'`
-num_nodes=`env | grep OMPI_COMM_WORLD_SIZE | awk -F= '{print $2}'`
-total_num_procs=$((${num_nodes} * ${nproc_per_node}))
+total_num_procs=`env | grep OMPI_COMM_WORLD_SIZE | awk -F= '{print $2}'`
 
 export OMP_NUM_THREADS=1
 
-if [ ${node_id} -eq 0 ]; then
+if [ ${rank} -eq 0 ]; then
   cp run_training_abci_launch.sh ${log_dir}/run_training_abci_launch_${JOB_ID}.sh
-fi
-
-if [ ${num_nodes} -lt 1 ]; then
-  echo "comm_world_size (${num_nodes}) < 1. exit."
-  exit 1
-fi
-
-# write master ip to file
-if [ ${node_id} -eq 0 ]; then
-  master_ip=`/sbin/ifconfig | grep ${ip_mask} | awk '{print $2}'`
-  echo $master_ip > ${master_ip_file}
-fi
-
-sleep 5
-
-# set master ip and port
-master_ip=`cat ${master_ip_file}`
-if [ -z ${master_ip} ]; then
-  echo "master_ip is null. exit."
-  exit 1
 fi
 
 if [ ${stage_dir} != "no" ]; then
@@ -77,10 +52,8 @@ pin_memory="--pin_memory"
 
 seed=`date +%s`
 
-${profile} python -m torch.distributed.launch \
-  --nproc_per_node ${nproc_per_node} --nnodes ${num_nodes} --node_rank ${node_id} --master_addr $master_ip --master_port 8888 \
-    ../train_hdf5_ddp.py \
-       --wireup_method "nccl-openmpi" \
+${profile} python3 ../train_hdf5_ddp.py \
+       --wireup_method "mpi" \
        --run_tag ${run_tag} \
        --data_dir_prefix ${data_dir_prefix} \
        --output_dir ${output_dir} \

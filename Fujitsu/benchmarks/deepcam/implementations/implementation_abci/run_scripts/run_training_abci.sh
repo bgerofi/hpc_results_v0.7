@@ -6,6 +6,7 @@ if [ $# -lt 1 ]; then
   exit 1
 fi
 
+. ~/miniconda3/etc/profile.d/conda.sh
 conda activate py37-pytorch
 
 . /etc/profile.d/modules.sh
@@ -14,6 +15,7 @@ module load gcc/7.4.0
 module load openmpi/2.1.6
 module load cuda/10.2/10.2.89
 module load cudnn/7.6/7.6.5
+module load nccl/2.7/2.7.8-1
 
 export CUDA_HOME=/apps/cuda/10.2.89
 export CUDNN_LIB_DIR=/apps/cudnn/7.6.5/cuda10.2

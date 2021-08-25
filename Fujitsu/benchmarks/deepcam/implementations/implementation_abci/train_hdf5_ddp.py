@@ -459,7 +459,8 @@ def main(pargs):
                               num_workers = pargs.max_inter_threads,
                               pin_memory = train_pin_memory,
                               drop_last = train_drop_last,
-                              timeout = timeout)
+                              timeout = timeout,
+                              prefetch_factor = 2, persistent_workers = True)
 
     num_validation_data_shards = 1
     validation_dataset_comm_rank = 0
@@ -492,7 +493,9 @@ def main(pargs):
                                    num_workers = pargs.max_inter_threads,
                                    pin_memory = validation_pin_memory,
                                    drop_last = validation_drop_last,
-                                   timeout = timeout)
+                                   timeout = timeout,
+                                   prefetch_factor = 2, persistent_workers = True)
+
 
     # log size of datasets
     logger.log_event(key = "train_samples", value = pargs.num_global_train_samples)

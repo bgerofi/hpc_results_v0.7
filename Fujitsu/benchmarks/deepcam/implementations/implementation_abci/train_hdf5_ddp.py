@@ -415,8 +415,8 @@ def main(pargs):
         timeout = 0
     else:
         timeout = 300
-    #pargs.max_inter_threads = 1
-    #timeout = 0
+    pargs.max_inter_threads = 0
+    timeout = 0
 
     train_allow_uneven_distribution = True
     if pargs.dummy:
@@ -460,7 +460,9 @@ def main(pargs):
                               pin_memory = train_pin_memory,
                               drop_last = train_drop_last,
                               timeout = timeout,
-                              prefetch_factor = 2, persistent_workers = True)
+                              #prefetch_factor = 1,
+                              #persistent_workers = (pargs.max_inter_threads > 0)
+							  )
 
     num_validation_data_shards = 1
     validation_dataset_comm_rank = 0
@@ -494,8 +496,13 @@ def main(pargs):
                                    pin_memory = validation_pin_memory,
                                    drop_last = validation_drop_last,
                                    timeout = timeout,
-                                   prefetch_factor = 2, persistent_workers = True)
+                                   #prefetch_factor = 1,
+                                   #persistent_workers = (pargs.max_inter_threads > 0)
+								   )
 
+    MPI.COMM_WORLD.Barrier()
+    if hvd.rank() == 0:
+        print("DataLoaders are ready on all ranks.")
 
     # log size of datasets
     logger.log_event(key = "train_samples", value = pargs.num_global_train_samples)

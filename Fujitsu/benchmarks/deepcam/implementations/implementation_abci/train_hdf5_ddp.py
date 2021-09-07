@@ -52,6 +52,7 @@ from utils import utils
 from utils import losses
 from utils import parsing_helpers as ph
 from utils import optimizer as uoptim
+from utils.spatial_local_sampler import SpatialLocalSampler
 from utils.distributed import DistributedSampler
 from data import cam_hdf5_dataset as cam
 from architecture import deeplab_xception
@@ -397,7 +398,7 @@ def main(pargs):
         #num_local_train_samples = num_local_train_samples_.long().item()
 
         # XXX: nr. of local train samples is same across all ranks
-        num_local_train_samples_ = torch.Tensor([len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])])
+        num_local_train_samples_ = len([ x for x in os.listdir(local_train_dir) if x.endswith('.h5') ])
         num_local_train_samples = num_local_train_samples_
 
         local_validation_dir = os.path.join(pargs.stage_dir, "validation", str(comm_rank))
@@ -434,7 +435,7 @@ def main(pargs):
 
     # Set up the data feeder
     # train
-    train_set = cam.CamDataset(train_dir, 
+    train_set = cam.CamDistributedDataset(train_dir,
                                statsfile = os.path.join(pargs.data_dir_prefix, 'stats.h5'),
                                channels = pargs.channels,
                                allow_uneven_distribution = train_allow_uneven_distribution,
@@ -444,13 +445,14 @@ def main(pargs):
                                dummy = pargs.dummy,
                                num_local_samples = num_local_train_samples,
                                comm_size = 1,
-                               comm_rank = 0)
+                               comm_rank = 0,
+                               global_size = comm_size,
+                               global_rank = comm_rank)
 
-    distributed_train_sampler = DistributedSampler(train_set,
-                                                   num_replicas = num_train_data_shards,
-                                                   rank = train_dataset_comm_rank,
-                                                   shuffle = pargs.shuffle_after_epoch,
-                                                   dataset_size = num_local_train_samples)
+    distributed_train_sampler = SpatialLocalSampler(train_set,
+                                                   num_replicas = comm_size,
+                                                   rank = comm_rank,
+                                                   global_fraction = 0)
 
     train_loader = DataLoader(train_set,
                               pargs.local_batch_size,

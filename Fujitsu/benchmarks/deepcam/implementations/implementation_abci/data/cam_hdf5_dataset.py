@@ -160,3 +160,91 @@ class CamDataset(Dataset):
 
         
         return data, label, filename
+
+
+
+
+class CamDistributedDataset(Dataset):
+
+    # comm_size and comm_rank are local to the given rank
+    # global_size and global_rank are global across the entire MPI job
+    def __init__(self, source, statsfile, channels, allow_uneven_distribution = False, shuffle = False, preprocess = True, padding = False, dummy = False, num_local_samples = 0, comm_size = 1, comm_rank = 0, seed = 12345, global_size = 1, global_rank = 0):
+        self.source = source
+        self.statsfile = statsfile
+        self.channels = channels
+        self.shuffle = shuffle
+        self.preprocess = preprocess
+        self.padding = padding
+        self.dummy = dummy
+        self.all_files = sorted( [ os.path.join(self.source,x) for x in os.listdir(self.source) if x.endswith('.h5') ] )
+        self.num_local_samples = num_local_samples
+        self.comm_size = comm_size
+        self.comm_rank = comm_rank
+        self.global_size = global_size
+        self.global_rank = global_rank
+        self.allow_uneven_distribution = allow_uneven_distribution
+        assert(num_local_samples == len(self.all_files))
+        print("CamDistributedDataset[{}/{}]: source: {}, num_local_samples: {}".format(
+            global_rank, global_size, self.source, num_local_samples))
+
+        #split list of files
+        self.rng = np.random.RandomState(seed)
+
+        #get shapes
+        filename = os.path.join(self.source, self.all_files[0])
+        with h5.File(filename, "r") as fin:
+            self.data_shape = fin['climate']['data'].shape
+            self.label_shape = fin['climate']['labels_0'].shape
+
+            if self.dummy:
+                self.data = fin['climate']['data'][..., self.channels]
+                self.label = fin['climate']['labels_0'][...]
+                self.data = np.transpose(self.data, (2,0,1))
+
+        #get statsfile for normalization
+        #open statsfile
+        with h5.File(self.statsfile, "r") as f:
+            data_shift = f["climate"]["minval"][self.channels]
+            data_scale = 1. / ( f["climate"]["maxval"][self.channels] - data_shift )
+
+        #reshape into broadcastable shape
+        self.data_shift = np.reshape( data_shift, (data_shift.shape[0], 1, 1) ).astype(np.float32)
+        self.data_scale = np.reshape( data_scale, (data_scale.shape[0], 1, 1) ).astype(np.float32)
+
+        if self.dummy:
+            self.data = self.data_scale * (self.data - self.data_shift)
+
+        # Global samples array
+        self.samples = [None] * int(num_local_samples * self.global_size)
+        for i in range(num_local_samples):
+            self.samples[num_local_samples * self.global_rank + i] = self.all_files[i]
+
+    def __len__(self):
+        return len(self.samples)
+
+
+    @property
+    def shapes(self):
+        return self.data_shape, self.label_shape
+
+
+    def __getitem__(self, idx):
+        filename = os.path.join(self.source, self.samples[idx])
+
+        if self.dummy:
+            data = self.data
+            label = self.label
+        else:
+            #load data and project
+            with h5.File(filename, "r") as f:
+                data = f["climate/data"][..., self.channels]
+                label = f["climate/labels_0"][...]
+
+            #transpose to NCHW
+            data = np.transpose(data, (2,0,1))
+
+            #preprocess
+            data = self.data_scale * (data - self.data_shift)
+
+
+        return data, label, filename

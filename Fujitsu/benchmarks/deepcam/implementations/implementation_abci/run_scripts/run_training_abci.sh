@@ -1,7 +1,7 @@
 #!/bin/bash -i
 
 if [ $# -lt 1 ]; then
-  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [data_staging (default: on)] [load_debug_data (default: off)] [prof: (default: off)]"
+  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [data_staging (default: on)] [load_debug_data (default: off)] [prof: (default: off)] [fraction: (default 0)]"
   echo "load_debug_data: {0: no, 1:yes (from files), 2: yes (dummy data)}"
   exit 1
 fi
@@ -86,6 +86,12 @@ else
   prof=0
 fi
 
+if [ $# -gt 5 ]; then
+  fraction=$6
+else
+  fraction=0
+fi
+
 if [ ${debug} -eq 2 ]; then
   dummy=1
 else
@@ -139,6 +145,7 @@ mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${run_tag} \
   ${debug} \
   ${dummy} \
+  ${fraction} \
   ${profile}
 
 echo "copy output directory"

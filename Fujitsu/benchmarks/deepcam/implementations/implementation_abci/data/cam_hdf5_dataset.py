@@ -21,15 +21,18 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import os
+import sys
 import h5py as h5
 import numpy as np
 import math
 from time import sleep
+import pickle
 
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
+from typing import Any, Callable, cast, Dict, List, Optional, Tuple
 
 
 #dataset class
@@ -176,7 +179,7 @@ class CamDistributedDataset(Dataset):
         self.preprocess = preprocess
         self.padding = padding
         self.dummy = dummy
-        self.all_files = sorted( [ os.path.join(self.source,x) for x in os.listdir(self.source) if x.endswith('.h5') ] )
+        self.all_files = sorted( [ x for x in os.listdir(self.source) if x.endswith('.h5') ] )
         self.num_local_samples = num_local_samples
         self.comm_size = comm_size
         self.comm_rank = comm_rank
@@ -184,8 +187,8 @@ class CamDistributedDataset(Dataset):
         self.global_rank = global_rank
         self.allow_uneven_distribution = allow_uneven_distribution
         assert(num_local_samples == len(self.all_files))
-        print("CamDistributedDataset[{}/{}]: source: {}, num_local_samples: {}".format(
-            global_rank, global_size, self.source, num_local_samples))
+        #print("CamDistributedDataset[{}/{}]: source: {}, num_local_samples: {}".format(global_rank, global_size, self.source, num_local_samples))
+        #print("[{}]: {}".format(global_rank, self.all_files))
 
         #split list of files
         self.rng = np.random.RandomState(seed)
@@ -235,16 +238,63 @@ class CamDistributedDataset(Dataset):
             data = self.data
             label = self.label
         else:
-            #load data and project
-            with h5.File(filename, "r") as f:
-                data = f["climate/data"][..., self.channels]
-                label = f["climate/labels_0"][...]
+            # HDF5?
+            if filename[len(filename) - 2:] == "h5":
+                #load data and project
+                with h5.File(filename, "r") as f:
+                    data = f["climate/data"][..., self.channels]
+                    label = f["climate/labels_0"][...]
 
-            #transpose to NCHW
-            data = np.transpose(data, (2,0,1))
+                #transpose to NCHW
+                data = np.transpose(data, (2,0,1))
 
-            #preprocess
-            data = self.data_scale * (data - self.data_shift)
-
+                #preprocess
+                data = self.data_scale * (data - self.data_shift)
+            elif filename[len(filename) - 4:] == "pckl":
+                with open(filename, 'rb') as f:
+                    data, label = pickle.load(f)
+            else:
+                print("error: invalid file format for: {}".format(filename))
+                os.exit(1)
 
         return data, label, filename
+
+
+    def get_raw_item(self, index:int) -> Tuple[Any, Any, Any]:
+        data, label, filename = self.__getitem__(index)
+
+        # Return filename only, without full path
+        return data, self.samples[index], label
+
+
+    def add_a_item(self, idx:int, filename, label, data):
+        if filename[len(filename) - 4:] != "pckl":
+            filename += ".pckl"
+
+        fullname = os.path.join(self.source, filename)
+
+        with open(fullname, 'wb') as f:
+            pickle.dump((data, label), f)
+            #print("[{}]: added idx: {}, filename: {}".format(self.global_rank, idx, filename))
+
+        self.samples[idx] = filename
+
+
+    def remove_an_item(self, index):
+        # Remove an item from list but still store the file physically.
+        self.samples[index] = None
+
+
+    def delete_an_item(self, idx):
+        # Remove and physically delete an item
+        if self.samples[idx] is None:
+            print("WARNING: [{}] tried to remove non existing sample idx: {}".format(
+                self.global_rank, idx))
+            return
+
+        filename = os.path.join(self.source, self.samples[idx])
+        os.remove(filename)
+
+        self.remove_an_item(idx)
+        #print("[{}]: removed idx: {}, filename: {}".format(self.global_rank, idx, filename))
+

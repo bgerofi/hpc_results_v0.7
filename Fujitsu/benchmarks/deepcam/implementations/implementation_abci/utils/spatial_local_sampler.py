@@ -1,4 +1,5 @@
 import math
+import sys
 import random
 from typing import TypeVar, Optional, Iterator
 
@@ -233,5 +234,7 @@ class SpatialLocalSampler(Sampler[T_co]):
             epoch (int): Epoch number.
         """
         self.epoch = epoch
-        self.next_epoch()
+
+        # Called explicitly in training loop
+        #self.next_epoch()
     

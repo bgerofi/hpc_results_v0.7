@@ -23,6 +23,7 @@
 # Basics
 import sys
 import os
+import math
 import numpy as np
 import argparse as ap
 import datetime as dt
@@ -54,6 +55,7 @@ from utils import parsing_helpers as ph
 from utils import optimizer as uoptim
 from utils.spatial_local_sampler import SpatialLocalSampler
 from utils.distributed import DistributedSampler
+from utils.scheduler import SpatialScheduler as Scheduler
 from data import cam_hdf5_dataset as cam
 from architecture import deeplab_xception
 
@@ -447,12 +449,14 @@ def main(pargs):
                                comm_size = 1,
                                comm_rank = 0,
                                global_size = comm_size,
-                               global_rank = comm_rank)
+                               global_rank = comm_rank,
+                               seed = pargs.seed)
 
     distributed_train_sampler = SpatialLocalSampler(train_set,
                                                    num_replicas = comm_size,
                                                    rank = comm_rank,
-                                                   global_fraction = 0)
+                                                   seed = pargs.seed,
+                                                   global_fraction = pargs.fraction)
 
     train_loader = DataLoader(train_set,
                               pargs.local_batch_size,
@@ -465,6 +469,12 @@ def main(pargs):
                               #prefetch_factor = 1,
                               #persistent_workers = (pargs.max_inter_threads > 0)
 							  )
+
+    num_samples_comm = math.ceil(pargs.local_batch_size * hvd.size() * pargs.fraction)
+    train_scheduler = Scheduler(train_set,
+        sampler=distributed_train_sampler,
+        num_samples_comm=num_samples_comm)
+    MPI.COMM_WORLD.Barrier()
 
     num_validation_data_shards = 1
     validation_dataset_comm_rank = 0
@@ -518,10 +528,17 @@ def main(pargs):
 
     # training loop
     while True:
-            
         # start epoch
         logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
         distributed_train_sampler.set_epoch(epoch)
+
+        distributed_train_sampler.next_epoch()
+
+        torch.cuda.synchronize()
+        train_scheduler.scheduling()
+        torch.cuda.synchronize()
+
+        send_requests, recv_requests = None, None
 
         # epoch loop
         for inputs, label, filename in train_loader:
@@ -544,10 +561,17 @@ def main(pargs):
             else:
                 loss.backward()
 
+            if send_requests is not None:
+                train_scheduler.synchronize(send_requests, recv_requests)
+
             # Normalize gradients by L2 norm of gradient of the entire model
             if not have_apex and pargs.optimizer == "LAMB":
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             optimizer.step()
+
+            torch.cuda.synchronize()
+            send_requests, recv_requests = train_scheduler.communicate(step)
+            torch.cuda.synchronize()
 
             # step counter
             step += 1
@@ -718,7 +742,14 @@ def main(pargs):
                 logger.log_event(key = "target_accuracy_reached", value = pargs.target_iou, metadata = {'epoch_num': epoch+1, 'step_num': step})
                 target_accuracy_reached = True
                 break;
-                        
+
+        if send_requests is not None:
+            train_scheduler.synchronize(send_requests, recv_requests)
+
+        torch.cuda.synchronize()
+        train_scheduler.clean_local_storage()
+        torch.cuda.synchronize()
+
         # log the epoch
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1
@@ -729,7 +760,7 @@ def main(pargs):
 
     # run done
     logger.log_end(key = "run_stop", sync = True, metadata = {'status' : 'success'})
-    
+
 
 if __name__ == "__main__":
 
@@ -783,6 +814,7 @@ if __name__ == "__main__":
 # automatically by torch.distributed.launch.
     AP.add_argument("--local_rank", default=0, type=int)
     AP.add_argument("--local_size", default=1, type=int)
+    AP.add_argument('--fraction', type=float, default=0.0, help=' Fraction of non-local samples in SpatialLocalSampler. In range of [0,1]. If ratio = 0, it uses local sampling, 1 is global sampling. Default value = 0')
     pargs = AP.parse_args()
     
     #run the stuff

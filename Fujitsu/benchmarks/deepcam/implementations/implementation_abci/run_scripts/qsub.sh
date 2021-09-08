@@ -1,12 +1,13 @@
 #!/bin/bash
 
 if [ $# -eq 0 ]; then
-  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [mode (default: 1)] [prof: (default: off)]"
+  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [mode (default: 1)] [prof: (default: off)] [fraction: 0]"
   echo "mode:"
   echo " 0: direct data loading with full dataset,"
   echo " 1: data staging with full dataset (default),"
   echo " 2: data staging with small dataset (for debug),"
   echo " 3: use synthetic data (dummy data) generated in memory (for debug)"
+  echo "fraction: the fraction of samples shuffled globally"
   exit 1
 fi
 
@@ -25,6 +26,11 @@ if [ $# -gt 3 ]; then
   prof=$4
 else
   prof=0
+fi
+if [ $# -gt 4 ]; then
+  fraction=$5
+else
+  fraction=0
 fi
 group_id="gcb50300"
 runtime="1:00:00"
@@ -58,6 +64,6 @@ else
 fi
 
 qsub -g ${group_id} -l rt_F=${num_nodes} -l h_rt=${runtime} -o ${out_file} -j y -cwd ./run_training_abci.sh \
-  ${num_nodes} ${num_procs_per_node} ${data_staging} ${debug} ${prof}
+  ${num_nodes} ${num_procs_per_node} ${data_staging} ${debug} ${prof} ${fraction}
 
 sleep 1

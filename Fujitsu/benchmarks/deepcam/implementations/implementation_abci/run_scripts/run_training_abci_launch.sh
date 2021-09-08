@@ -16,7 +16,8 @@ num_data_shards=$8
 run_tag=$9
 debug=${10}
 dummy=${11}
-profile=${12}
+fraction=${12}
+profile=${13}
 
 log_dir=./logs
 mkdir -p ${output_dir}
@@ -52,7 +53,7 @@ pin_memory="--pin_memory"
 
 seed=`date +%s`
 
-${profile} python3 ../train_hdf5_ddp.py \
+${profile} python3 -u ../train_hdf5_ddp.py \
        --wireup_method "mpi" \
        --run_tag ${run_tag} \
        --data_dir_prefix ${data_dir_prefix} \
@@ -80,4 +81,5 @@ ${profile} python3 ../train_hdf5_ddp.py \
        --max_inter_threads 4 \
        --shuffle_after_epoch \
        --seed ${seed} \
+       --fraction ${fraction} \
        --local_batch_size 2 ${stage_dir} ${pin_memory} ${debug} ${dummy}  |& tee -a ${output_dir}/train_${JOB_ID}.out

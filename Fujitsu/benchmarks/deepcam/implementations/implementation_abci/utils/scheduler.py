@@ -1,6 +1,6 @@
 import torch
 from .spatial_local_sampler import SpatialLocalSampler
-from .distributed_image_folder import ImageFolder
+#from .distributed_image_folder import ImageFolder
 from torch.utils.data import Sampler, Dataset
 import numpy as np
 
@@ -18,7 +18,7 @@ class SpatialScheduler():
         non_blocking (bool, optional): If ``True`` (default), communicated based on the non-blocking mpi4py
         num_samples_comm (int, optional): Default: 3. The number of samples communicate at each iterations.
     """
-    def __init__(self, dataset: ImageFolder, sampler: SpatialLocalSampler, 
+    def __init__(self, dataset: None, sampler: SpatialLocalSampler, 
                     non_blocking: bool = True, num_samples_comm: int=3):
         
         self.dataset = dataset
@@ -32,7 +32,8 @@ class SpatialScheduler():
         self.schedule = []
         self.clean_list = []
         self.is_finished = True
-        print(self.rank,"SpatialScheduler",num_samples_comm)
+        if self.rank == 0:
+            print(self.rank, self.size, "SpatialScheduler", num_samples_comm)
         
     def finish_schedule(self):
         return self.is_finished
@@ -65,7 +66,7 @@ class SpatialScheduler():
                         send_requests.append(req)
                         
                     if sample_meta_data[1] == self.rank:
-                        buf = bytearray(1<<22) #Create 4MB buffer  #25: 32MB...
+                        buf = bytearray(1<<28) # 256MB buffer (just in case)
                         req = self.comm.irecv(buf, source=sample_meta_data[0], tag=sample_idx)
                         recv_requests.append(req)
                         #print(self.rank, "wait data from", sample_meta_data[0], "sample", sample_idx)

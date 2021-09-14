@@ -123,7 +123,7 @@ def main(pargs):
 
     MPI.COMM_WORLD.Barrier()
 
-	#set seed
+    #set seed
     seed = pargs.seed
     
     # Some setup
@@ -211,7 +211,7 @@ def main(pargs):
         
             #init db and get config
             resume_flag = pargs.run_tag if pargs.resume_logging else False
-            wandb.init(entity = wblogin, project = 'deepcam', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
+            wandb.init(entity = wblogin, project = 'DeepCAM', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
             config = wandb.config
         
             #set general parameters
@@ -222,6 +222,7 @@ def main(pargs):
             config.max_epochs = pargs.max_epochs
             config.local_batch_size = pargs.local_batch_size
             config.num_workers = comm_size
+            config.num_nodes = int(comm_size / pargs.local_size)
             config.channels = pargs.channels
             config.optimizer = pargs.optimizer
             config.start_lr = pargs.start_lr
@@ -232,6 +233,7 @@ def main(pargs):
             config.loss_weight_pow = pargs.loss_weight_pow
             config.lr_warmup_steps = pargs.lr_warmup_steps
             config.lr_warmup_factor = pargs.lr_warmup_factor
+            config.fraction = pargs.fraction
             
             # lr schedule if applicable
             if pargs.lr_schedule:
@@ -468,7 +470,7 @@ def main(pargs):
                               timeout = timeout,
                               #prefetch_factor = 1,
                               #persistent_workers = (pargs.max_inter_threads > 0)
-							  )
+                              )
 
     num_samples_comm = math.ceil(pargs.local_batch_size * hvd.size() * pargs.fraction)
     train_scheduler = Scheduler(train_set,
@@ -510,7 +512,7 @@ def main(pargs):
                                    timeout = timeout,
                                    #prefetch_factor = 1,
                                    #persistent_workers = (pargs.max_inter_threads > 0)
-								   )
+                                   )
 
     MPI.COMM_WORLD.Barrier()
     if hvd.rank() == 0:
@@ -625,9 +627,9 @@ def main(pargs):
                 logger.log_event(key = "train_loss", value = loss_avg_train, metadata = {'epoch_num': epoch+1, 'step_num': step})
                 
                 if have_wandb and (comm_rank == 0):
-                    wandb.log({"train_loss": loss_avg.item() / float(comm_size)}, step = step)
-                    wandb.log({"train_accuracy": iou_avg.item() / float(comm_size)}, step = step)
-                    wandb.log({"learning_rate": current_lr}, step = step)
+                    wandb.log({"train_loss": loss_avg_train, "epoch": epoch}, step = step)
+                    wandb.log({"train_accuracy": iou_avg_train, "epoch": epoch}, step = step)
+                    wandb.log({"learning_rate": current_lr, "epoch": epoch}, step = step)
 
             # validation step if desired
             if (step % pargs.validation_frequency == 0):
@@ -715,8 +717,8 @@ def main(pargs):
 
                 # log in wandb
                 if have_wandb and (comm_rank == 0):
-                    wandb.log({"eval_loss": loss_avg_val}, step=step)
-                    wandb.log({"eval_accuracy": iou_avg_val}, step=step)
+                    wandb.log({"eval_loss": loss_avg_val, "epoch": epoch}, step=step)
+                    wandb.log({"eval_accuracy": iou_avg_val, "epoch": epoch}, step=step)
 
                 # set to train
                 net.train()
@@ -732,7 +734,7 @@ def main(pargs):
                         'epoch': epoch,
                         'model': net.state_dict(),
                         'optimizer': optimizer.state_dict()
-		    }
+            }
                     if have_apex:
                         checkpoint['amp'] = amp.state_dict()
                     torch.save(checkpoint, os.path.join(pargs.local_output_dir, pargs.model_prefix + "_step_" + str(step) + ".cpt") )

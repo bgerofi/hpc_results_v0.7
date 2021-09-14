@@ -33,7 +33,8 @@ class SpatialScheduler():
         self.clean_list = []
         self.is_finished = True
         if self.rank == 0:
-            print(self.rank, self.size, "SpatialScheduler", num_samples_comm)
+            print("SpatialScheduler: total ranks: {}, num_samples_comm: {}".format(
+				self.size, num_samples_comm))
         
     def finish_schedule(self):
         return self.is_finished

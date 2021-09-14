@@ -21,15 +21,15 @@ if [ ${local_rank} -eq 0 ]; then
     cp ${data_path}/stats.h5 ${local_dir}
 fi
 
-# TODO: compute this based on the number of ranks and the final reformatted data
 start_idx=${rank}
-end_idx=${rank}
+end_idx=2047
+idx_step=${nprocs}
 
 train_local_dir="${local_dir}/train/${rank}/"
-train_data_prefix="${data_path}/${nprocs}/train_${nprocs}"
+train_data_prefix="${data_path}/train"
 
 validation_local_dir="${local_dir}/validation/${rank}/"
-validation_data_prefix="${data_path}/${nprocs}/validation_${nprocs}"
+validation_data_prefix="${data_path}/validation"
 
 # Training
 if [ -d ${train_local_dir} ]; then
@@ -41,10 +41,10 @@ fi
 if [ ! -d ${train_local_dir} ]; then
 	mkdir -p ${train_local_dir}
 
-	for file_idx in `seq ${start_idx} ${end_idx}`; do
-		train_data="${train_data_prefix}_$((${file_idx} + 1)).tar"
+	for file_idx in `seq ${start_idx} ${idx_step} ${end_idx}`; do
+		train_data="${train_data_prefix}_${file_idx}.tar"
 
-		echo "rank: $rank is staging: ${train_data} as file_idx: ${file_idx} from [${start_idx}, ${end_idx}]..."
+		#echo "rank: $rank is staging: ${train_data} as file_idx: ${file_idx} from [${start_idx}:${idx_step}:${end_idx}]..."
 		tar xf ${train_data} -C ${train_local_dir}
 	done
 fi
@@ -59,10 +59,10 @@ fi
 if [ ! -d ${validation_local_dir} ]; then
 	mkdir -p ${validation_local_dir}
 
-	for file_idx in `seq ${start_idx} ${end_idx}`; do
-		validation_data="${validation_data_prefix}_$((${file_idx} + 1)).tar"
+	for file_idx in `seq ${start_idx} ${idx_step} ${end_idx}`; do
+		validation_data="${validation_data_prefix}_${file_idx}.tar"
 
-		echo "rank: $rank is staging: ${validation_data} as file_idx: ${file_idx} from [${start_idx}, ${end_idx}]..."
+		#echo "rank: $rank is staging: ${validation_data} as file_idx: ${file_idx} from [${start_idx}:${idx_step}:${end_idx}]..."
 		tar xf ${validation_data} -C ${validation_local_dir}
 	done
 fi

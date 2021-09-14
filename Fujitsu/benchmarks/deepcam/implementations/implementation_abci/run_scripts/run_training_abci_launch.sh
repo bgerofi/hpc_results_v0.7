@@ -70,9 +70,11 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --training_visualization_frequency 0 \
        --validation_visualization_frequency 0 \
        --logging_frequency 10 \
-       --save_frequency 100 \
-       --max_epochs 200 \
+       --save_frequency 0 \
+       --max_epochs 25 \
        --amp_opt_level O1 \
+       --enable_wandb \
+       --wandb_certdir ${HOME} \
        --num_global_train_samples ${num_train_files} \
        --num_global_validation_samples ${num_validation_files} \
        --num_train_data_shards ${num_data_shards} \

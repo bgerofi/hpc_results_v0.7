@@ -30,13 +30,14 @@ source ~/venv/python-3.8.7+pytorch-1.8.1+horovod-0.22.0/bin/activate
 
 echo "job_id: ${JOB_ID}"
 
-now=`date +%s`
-run_tag="deepcam_prediction_run_${JOB_ID}_${now}"
+now=`date +%Y%m%d`
+run_tag="${now}-JOB_${JOB_ID}"
 
 #directories
 data_path_original=/bb/mlperfhpc/deepcam/original/All-Hist/
 #data_path_reformatted=/bb/mlperfhpc/deepcam/reformatted/
-data_path_reformatted=/groups/gcb50300/DeepCAM/128GB/reformatted/
+#data_path_reformatted=/groups/gcb50300/DeepCAM/128GB/reformatted/
+data_path_reformatted=/groups/gcb50300/DeepCAM/full/
 local_dir=${SGE_LOCALDIR}
 
 fs_output_dir="./runs/${run_tag}"
@@ -56,12 +57,14 @@ else
   nproc_per_node=4
 fi
 
-nprocs=$1
+num_nodes=$1
+run_tag="${run_tag}-${num_nodes}_nodes"
+
 
 cp $SGE_JOB_HOSTLIST ${hostfile}
 
-total_num_procs=$((${nprocs} * ${nproc_per_node}))
-echo "total_num_procs: ${total_num_procs}, num_nodes: ${nprocs}, num_procs_per_node: ${nproc_per_node}"
+total_num_procs=$((${num_nodes} * ${nproc_per_node}))
+echo "total_num_procs: ${total_num_procs}, num_nodes: ${num_nodes}, num_procs_per_node: ${nproc_per_node}"
 
 if [ ${total_num_procs} -lt 1 ]; then
   echo "total num processes < 1. exit." 
@@ -91,6 +94,13 @@ if [ $# -gt 5 ]; then
 else
   fraction=0
 fi
+
+if [ ${fraction} == "0" ]; then
+	run_tag="${run_tag}-local_shuffling"
+else
+	run_tag="${run_tag}-partial_${fraction}_shuffling"
+fi
+echo ${run_tag}
 
 if [ ${debug} -eq 2 ]; then
   dummy=1
@@ -132,8 +142,14 @@ else
   num_data_shards=${total_num_procs}
 fi
 
+#grep -v g0621 ${PE_HOSTFILE} | grep -v g0905 | cut -d" " -f 1 > ~/tmp/pe_hostfile
+if ! ${HOME}/bin/check_gpus.sh ${num_nodes}; then
+	echo "error: faulty GPUs?"
+	exit 1
+fi
+
 #run the stuff
-mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
+mpirun -hostfile ~/tmp/${JOB_ID}_hostfile -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${nproc_per_node} \
   ${data_dir_prefix} \
   ${stage_dir} \
@@ -147,6 +163,8 @@ mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${dummy} \
   ${fraction} \
   ${profile}
+
+rm ~/tmp/${JOB_ID}_hostfile
 
 echo "copy output directory"
 cp -r ${local_output_dir}/* ${fs_output_dir}

@@ -129,7 +129,10 @@ class SpatialLocalSampler(Sampler[T_co]):
         self.indices = None#Indices of each rank used in this epoch
         self.next_indices_local = [None] * self.num_replicas #Indices of each rank used in next epoch (used by the dataset-scheduler to move samples between ranks)
         self.next_indices_global = [None] * self.num_replicas
-        
+
+        if self.rank == 0:
+            print("SpatialLocalSampler: total ranks: {}, dataset len: {}, num_samples_local: {}, num_samples_global: {}".format(
+				self.num_replicas, self.len_dataset, self.num_samples_local, self.num_samples_global))
         #print("PartialLocalSampler: ",self.rank, self.len_dataset, self.total_size, self.num_samples, self.num_samples_local, self.num_samples_global, self.num_replicas, self.len_dataset_local, self.len_dataset_global, self.total_size_global)
 
     def _init_first_indices_list(self):

@@ -120,7 +120,7 @@ fi
 
 
 #mpi options
-mpioptions="-mca pml ob1 -map-by ppr:${nproc_per_node}:node"
+mpioptions="--oversubscribe -map-by ppr:${nproc_per_node}:node -mca pml ob1 -mca btl ^openib -mca btl_tcp_if_include bond0 -x HOROVOD_STALL_CHECK_DISABLE=1"
 
 if [ ${prof} -gt 0 ]; then
   echo "prof"
@@ -129,8 +129,10 @@ else
   profile=""
 fi
 
-num_train_files=`ls ${data_path_original}/train | grep data | wc -l`
-num_validation_files=`ls ${data_path_original}/validation | grep data | wc -l`
+#num_train_files=`ls ${data_path_original}/train | grep data | wc -l`
+#num_validation_files=`ls ${data_path_original}/validation | grep data | wc -l`
+num_train_files=108544
+num_validation_files=26624
 
 if [ ${data_staging} -gt 0 ]; then
   data_dir_prefix=${data_path_reformatted}
@@ -142,14 +144,14 @@ else
   num_data_shards=${total_num_procs}
 fi
 
-#grep -v g0621 ${PE_HOSTFILE} | grep -v g0905 | cut -d" " -f 1 > ~/tmp/pe_hostfile
-if ! ${HOME}/bin/check_gpus.sh ${num_nodes}; then
-	echo "error: faulty GPUs?"
-	exit 1
-fi
+#if ! ${HOME}/bin/check_gpus.sh ${num_nodes}; then
+#	echo "error: faulty GPUs?"
+#	exit 1
+#fi
 
 #run the stuff
-mpirun -hostfile ~/tmp/${JOB_ID}_hostfile -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
+#mpirun -hostfile ~/tmp/${JOB_ID}_hostfile -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
+mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${nproc_per_node} \
   ${data_dir_prefix} \
   ${stage_dir} \

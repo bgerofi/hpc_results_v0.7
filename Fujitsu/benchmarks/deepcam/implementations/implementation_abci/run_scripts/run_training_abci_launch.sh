@@ -71,7 +71,7 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --validation_visualization_frequency 0 \
        --logging_frequency 10 \
        --save_frequency 0 \
-       --max_epochs 25 \
+       --max_epochs 30 \
        --amp_opt_level O1 \
        --enable_wandb \
        --wandb_certdir ${HOME} \

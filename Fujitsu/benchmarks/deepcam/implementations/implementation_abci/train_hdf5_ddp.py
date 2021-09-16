@@ -211,7 +211,7 @@ def main(pargs):
         
             #init db and get config
             resume_flag = pargs.run_tag if pargs.resume_logging else False
-            wandb.init(entity = wblogin, project = 'DeepCAM', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
+            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_GC', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
             config = wandb.config
         
             #set general parameters
@@ -369,6 +369,7 @@ def main(pargs):
     
     step = start_step
     epoch = start_epoch
+    eval_epoch = epoch
     current_lr = pargs.start_lr if not pargs.lr_schedule else ph.get_lr(scheduler, pargs.lr_schedule)
     net.train()
 
@@ -531,6 +532,7 @@ def main(pargs):
     # training loop
     while True:
         # start epoch
+        MPI.COMM_WORLD.Barrier()
         logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
         distributed_train_sampler.set_epoch(epoch)
 
@@ -545,6 +547,7 @@ def main(pargs):
         # epoch loop
         for inputs, label, filename in train_loader:
   
+            MPI.COMM_WORLD.Barrier()
             # send to device
             inputs = inputs.to(device)
             label = label.to(device)
@@ -632,8 +635,10 @@ def main(pargs):
                     wandb.log({"learning_rate": current_lr, "epoch": epoch}, step = step)
 
             # validation step if desired
-            if (step % pargs.validation_frequency == 0):
-
+            #if (step % pargs.validation_frequency == 0):
+            # validation in each epoch
+            if (eval_epoch != epoch):
+                eval_epoch = epoch
                 logger.log_start(key = "eval_start", metadata = {'epoch_num': epoch+1})
 
                 #eval

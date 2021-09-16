@@ -12,7 +12,7 @@ if [ $# -eq 0 ]; then
 fi
 
 num_nodes=$1
-let NUM_JOB_NODES=${num_nodes}+2
+let NUM_JOB_NODES=${num_nodes}
 if [ $# -gt 1 ]; then
   num_procs_per_node=$2
 else
@@ -33,8 +33,9 @@ if [ $# -gt 4 ]; then
 else
   fraction=0
 fi
-group_id="gcb50300"
-runtime="2:00:00"
+#group_id="gcb50300"
+group_id="gad50726"
+runtime="4:00:00"
 
 log_time=`date +%s`
 log_dir=logs
@@ -64,7 +65,7 @@ else
   exit 1
 fi
 
-qsub -g ${group_id} -l rt_F=${NUM_JOB_NODES} -l h_rt=${runtime} -o ${out_file} -j y -cwd ./run_training_abci.sh \
+qsub -g ${group_id} -ar 4388 -l rt_F=${NUM_JOB_NODES} -l h_rt=${runtime} -o ${out_file} -j y -cwd ./run_training_abci.sh \
   ${num_nodes} ${num_procs_per_node} ${data_staging} ${debug} ${prof} ${fraction}
 
 sleep 1

@@ -27,6 +27,7 @@ import numpy as np
 import math
 from time import sleep
 import pickle
+import threading
 
 import torch
 from torch.utils.data import Dataset
@@ -186,6 +187,7 @@ class CamDistributedDataset(Dataset):
         self.global_size = global_size
         self.global_rank = global_rank
         self.allow_uneven_distribution = allow_uneven_distribution
+        self.lock = threading.Lock()
         assert(num_local_samples == len(self.all_files))
         #print("CamDistributedDataset[{}/{}]: source: {}, num_local_samples: {}".format(global_rank, global_size, self.source, num_local_samples))
         #print("[{}]: {}".format(global_rank, self.all_files))
@@ -232,7 +234,9 @@ class CamDistributedDataset(Dataset):
 
 
     def __getitem__(self, idx):
+        self.lock.acquire()
         filename = os.path.join(self.source, self.samples[idx])
+        self.lock.release()
 
         if self.dummy:
             data = self.data
@@ -277,20 +281,27 @@ class CamDistributedDataset(Dataset):
             pickle.dump((data, label), f)
             #print("[{}]: added idx: {}, filename: {}".format(self.global_rank, idx, filename))
 
+        self.lock.acquire()
         self.samples[idx] = filename
+        self.lock.release()
 
 
     def remove_an_item(self, index):
         # Remove an item from list but still store the file physically.
+        self.lock.acquire()
         self.samples[index] = None
+        self.lock.release()
 
 
     def delete_an_item(self, idx):
         # Remove and physically delete an item
+        self.lock.acquire()
         if self.samples[idx] is None:
             print("WARNING: [{}] tried to remove non existing sample idx: {}".format(
                 self.global_rank, idx))
+            self.lock.release()
             return
+        self.lock.release()
 
         filename = os.path.join(self.source, self.samples[idx])
         os.remove(filename)

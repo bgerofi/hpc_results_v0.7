@@ -23,6 +23,7 @@ fi
 
 start_idx=${rank}
 end_idx=2047
+#end_idx=${rank}
 idx_step=${nprocs}
 
 train_local_dir="${local_dir}/train/${rank}/"

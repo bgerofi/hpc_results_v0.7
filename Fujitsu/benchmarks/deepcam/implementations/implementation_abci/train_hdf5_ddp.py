@@ -55,7 +55,7 @@ from utils import parsing_helpers as ph
 from utils import optimizer as uoptim
 from utils.spatial_local_sampler import SpatialLocalSampler
 from utils.distributed import DistributedSampler
-from utils.scheduler import SpatialScheduler as Scheduler
+from utils.scheduler import PartialScheduler as Scheduler
 from data import cam_hdf5_dataset as cam
 from architecture import deeplab_xception
 
@@ -211,7 +211,7 @@ def main(pargs):
         
             #init db and get config
             resume_flag = pargs.run_tag if pargs.resume_logging else False
-            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_GC', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
+            wandb.init(entity = wblogin, project = 'DeepCAM', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
             config = wandb.config
         
             #set general parameters
@@ -455,11 +455,11 @@ def main(pargs):
                                global_rank = comm_rank,
                                seed = pargs.seed)
 
-    distributed_train_sampler = SpatialLocalSampler(train_set,
-                                                   num_replicas = comm_size,
-                                                   rank = comm_rank,
-                                                   seed = pargs.seed,
-                                                   global_fraction = pargs.fraction)
+    # Sampling happens locally
+    distributed_train_sampler = DistributedSampler(train_set,
+                                                   num_replicas = 1,
+                                                   rank = 0,
+                                                   seed = pargs.seed)
 
     train_loader = DataLoader(train_set,
                               pargs.local_batch_size,
@@ -473,10 +473,10 @@ def main(pargs):
                               #persistent_workers = (pargs.max_inter_threads > 0)
                               )
 
-    num_samples_comm = math.ceil(pargs.local_batch_size * hvd.size() * pargs.fraction)
     train_scheduler = Scheduler(train_set,
-        sampler=distributed_train_sampler,
-        num_samples_comm=num_samples_comm)
+                local_batch_size = pargs.local_batch_size,
+                fraction = pargs.fraction,
+                seed = pargs.seed)
     MPI.COMM_WORLD.Barrier()
 
     num_validation_data_shards = 1
@@ -534,12 +534,11 @@ def main(pargs):
         # start epoch
         MPI.COMM_WORLD.Barrier()
         logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
+        train_set.next_epoch()
         distributed_train_sampler.set_epoch(epoch)
 
-        distributed_train_sampler.next_epoch()
-
         torch.cuda.synchronize()
-        train_scheduler.scheduling()
+        train_scheduler.scheduling(epoch)
         torch.cuda.synchronize()
 
         send_requests, recv_requests = None, None

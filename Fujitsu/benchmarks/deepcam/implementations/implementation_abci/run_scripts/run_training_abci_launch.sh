@@ -52,6 +52,7 @@ fi
 pin_memory="--pin_memory"
 
 seed=`date +%s`
+seed=42
 
 ${profile} python3 -u ../train_hdf5_ddp.py \
        --wireup_method "mpi" \

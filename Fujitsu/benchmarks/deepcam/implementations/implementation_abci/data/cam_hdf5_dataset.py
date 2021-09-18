@@ -219,10 +219,8 @@ class CamDistributedDataset(Dataset):
         if self.dummy:
             self.data = self.data_scale * (self.data - self.data_shift)
 
-        # Global samples array
-        self.samples = [None] * int(num_local_samples * self.global_size)
-        for i in range(num_local_samples):
-            self.samples[num_local_samples * self.global_rank + i] = self.all_files[i]
+        # Samples array, updated in next_epoch()
+        self.samples = self.all_files.copy()
 
     def __len__(self):
         return len(self.samples)
@@ -271,6 +269,7 @@ class CamDistributedDataset(Dataset):
         return data, self.samples[index], label
 
 
+    # Replace an item with a new one in the all_files array
     def add_a_item(self, idx:int, filename, label, data):
         if filename[len(filename) - 4:] != "pckl":
             filename += ".pckl"
@@ -282,7 +281,7 @@ class CamDistributedDataset(Dataset):
             #print("[{}]: added idx: {}, filename: {}".format(self.global_rank, idx, filename))
 
         self.lock.acquire()
-        self.samples[idx] = filename
+        self.all_files[idx] = filename
         self.lock.release()
 
 
@@ -308,4 +307,7 @@ class CamDistributedDataset(Dataset):
 
         self.remove_an_item(idx)
         #print("[{}]: removed idx: {}, filename: {}".format(self.global_rank, idx, filename))
+
+    def next_epoch(self):
+        self.samples = self.all_files.copy()
 

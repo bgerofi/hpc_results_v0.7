@@ -22,8 +22,8 @@ profile=${13}
 log_dir=./logs
 mkdir -p ${output_dir}
 
-rank=`env | grep OMPI_COMM_WORLD_RANK | awk -F= '{print $2}'`
-total_num_procs=`env | grep OMPI_COMM_WORLD_SIZE | awk -F= '{print $2}'`
+rank=${OMPI_COMM_WORLD_RANK}
+total_num_procs=${OMPI_COMM_WORLD_SIZE}
 
 export OMP_NUM_THREADS=1
 
@@ -49,10 +49,19 @@ else
   dummy=""
 fi
 
+START_LR=0.0055
+if [ ${total_num_procs} -eq 2048 ]; then
+    START_LR=0.011
+fi
+
+run_tag="${run_tag}-LR-${START_LR}"
+
 pin_memory="--pin_memory"
 
 seed=`date +%s`
 seed=42
+# Same seed as https://wandb.ai/bgerofi/DeepCAM-ABCI_GC/runs/20210916-JOB_7940702-256_nodes-partial_0.5_shuffling?workspace=user-bgerofi
+seed=1631765780
 
 ${profile} python3 -u ../train_hdf5_ddp.py \
        --wireup_method "mpi" \
@@ -62,7 +71,7 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --local_output_dir ${local_output_dir} \
        --model_prefix "classifier" \
        --optimizer "LAMB" \
-       --start_lr 0.0055 \
+       --start_lr ${START_LR} \
        --lr_schedule type="multistep",milestones="800",decay_rate="0.1" \
        --lr_warmup_steps 400 \
        --lr_warmup_factor 1. \

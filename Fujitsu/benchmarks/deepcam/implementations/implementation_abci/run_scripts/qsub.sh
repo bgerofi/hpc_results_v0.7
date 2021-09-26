@@ -35,7 +35,8 @@ else
 fi
 group_id="gcb50300"
 #group_id="gad50699"
-runtime="1:00:00"
+group_id="gad50699"
+runtime="0:30:00"
 
 log_time=`date +%s`
 log_dir=logs

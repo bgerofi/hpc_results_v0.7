@@ -26,7 +26,24 @@ fi
 source /etc/profile.d/modules.sh
 module purge
 module load gcc/9.3.0 python/3.8/3.8.7 openmpi/4.0.5 cuda/11.1/11.1.1 cudnn/8.0/8.0.5 nccl/2.8/2.8.4-1
-source ~/venv/python-3.8.7+pytorch-1.8.1+horovod-0.22.0/bin/activate
+
+num_nodes=$1
+local_dir=${SGE_LOCALDIR}
+
+# Distribute pytorch
+echo "Distributing pytorch to node local SSDs..."
+DIST_SECS=`date +%s`
+mpirun -n ${num_nodes} -map-by ppr:1:node mkdir -p /tmp/bgerofi
+mpirun -n ${num_nodes} -map-by ppr:1:node ${HOME}/src/mpicp/mpicp ${HOME}/venv/python-3.8.7+pytorch-1.8.1+horovod-0.22.0.tgz ${local_dir}/
+mpirun -n ${num_nodes} -map-by ppr:1:node tar zxf ${local_dir}/python-3.8.7+pytorch-1.8.1+horovod-0.22.0.tgz -C ${local_dir}/
+mpirun -n ${num_nodes} -map-by ppr:1:node rm -f /tmp/bgerofi/python-3.8.7+pytorch-1.8.1+horovod-0.22.0
+mpirun -n ${num_nodes} -map-by ppr:1:node ln -s ${local_dir}/python-3.8.7+pytorch-1.8.1+horovod-0.22.0 /tmp/bgerofi/python-3.8.7+pytorch-1.8.1+horovod-0.22.0
+let DIST_SECS=`date +%s`-${DIST_SECS}
+echo "Done. Took ${DIST_SECS} seconds."
+
+source /tmp/bgerofi/python-3.8.7+pytorch-1.8.1+horovod-0.22.0/bin/activate
+
+#source ~/venv/python-3.8.7+pytorch-1.8.1+horovod-0.22.0/bin/activate
 
 echo "job_id: ${JOB_ID}"
 
@@ -38,7 +55,6 @@ data_path_original=/bb/mlperfhpc/deepcam/original/All-Hist/
 #data_path_reformatted=/bb/mlperfhpc/deepcam/reformatted/
 #data_path_reformatted=/groups/gcb50300/DeepCAM/128GB/reformatted/
 data_path_reformatted=/groups/gcb50300/DeepCAM/full/
-local_dir=${SGE_LOCALDIR}
 
 fs_output_dir="./runs/${run_tag}"
 local_output_dir="${local_dir}/${run_tag}"
@@ -57,7 +73,6 @@ else
   nproc_per_node=4
 fi
 
-num_nodes=$1
 run_tag="${run_tag}-${num_nodes}_nodes"
 
 

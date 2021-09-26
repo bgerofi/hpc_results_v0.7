@@ -37,6 +37,10 @@ class PartialScheduler():
         random.shuffle(self.permutation)
         self.clean_list = []
 
+        self.cp_rng = np.random.RandomState(seed)
+        self.comm_targets = list(range(self.size))
+        self.cp_rng.shuffle(self.comm_targets)
+
         if self.rank == 0:
             print("SpatialScheduler: total ranks: {}, local samples: {}, local_batch_size: {}, fraction: {}".format(
 				self.size,
@@ -67,20 +71,28 @@ class PartialScheduler():
         #    print("communicate: {}".format(range(self.idx, math.floor(self.idx_float))))
 
         for idx in range(self.idx, math.floor(self.idx_float)):
-            # Send to next rank
+            # Shuffle target rank list
+            self.cp_rng.shuffle(self.comm_targets)
+
+            # Do not communicate with self
+            target_rank = self.comm_targets[self.rank]
+            if target_rank == self.rank:
+                continue
+
+            # Send to target rank
             sample, path, class_name = self.dataset.get_raw_item(self.permutation[idx])
             send_data = {'idx':idx, 'path':path, 'sample':sample, 'class_name':class_name}
-            req = self.comm.isend(send_data, dest=((self.rank + 1) % self.size), tag=idx)
+            req = self.comm.isend(send_data, dest=target_rank, tag=idx)
             if self.rank == 0:
                 print("[0]: send {}th {}:{} -> rank {}".format(
-                idx, self.permutation[idx], path, (self.rank + 1) % self.size))
+                idx, self.permutation[idx], path, target_rank))
 
             send_requests.append(req)
             self.clean_list.append(self.permutation[idx])
 
-            # Recv from previous
+            # Recv from ANY
             buf = bytearray(1<<28) # 256MB buffer (just in case)
-            req = self.comm.irecv(buf, source=((self.rank - 1) % self.size), tag=idx)
+            req = self.comm.irecv(buf, source=MPI.ANY_SOURCE, tag=idx)
             recv_requests.append(req)
 
         self.idx = math.floor(self.idx_float)

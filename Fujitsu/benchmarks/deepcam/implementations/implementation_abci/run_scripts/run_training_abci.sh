@@ -113,7 +113,7 @@ fi
 if [ ${fraction} == "0" ]; then
 	run_tag="${run_tag}-local_shuffling"
 else
-	run_tag="${run_tag}-partial_${fraction}_shuffling"
+	run_tag="${run_tag}-partial_${fraction}_shuffling-rand_pairs"
 fi
 echo ${run_tag}
 

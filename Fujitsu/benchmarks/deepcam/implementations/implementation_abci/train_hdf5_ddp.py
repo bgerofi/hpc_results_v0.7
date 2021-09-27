@@ -459,7 +459,9 @@ def main(pargs):
     distributed_train_sampler = DistributedSampler(train_set,
                                                    num_replicas = 1,
                                                    rank = 0,
-                                                   seed = pargs.seed)
+                                                   seed = pargs.seed,
+                                                   comm_rank = comm_rank,
+                                                   comm_size = comm_size)
 
     train_loader = DataLoader(train_set,
                               pargs.local_batch_size,

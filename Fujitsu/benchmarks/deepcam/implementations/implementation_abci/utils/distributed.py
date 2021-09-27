@@ -3,6 +3,7 @@
 
 import math
 import torch
+import random
 #from . import Sampler
 from torch.utils.data import Sampler
 import torch.distributed as dist
@@ -51,7 +52,7 @@ class DistributedSampler(Sampler):
         ...     train(loader)
     """
 
-    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, dataset_size=-1):
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, dataset_size=-1, comm_size=1, comm_rank=0):
         if num_replicas is None:
             if not dist.is_available():
                 raise RuntimeError("Requires distributed package to be available")
@@ -63,6 +64,8 @@ class DistributedSampler(Sampler):
         self.dataset = dataset
         self.num_replicas = num_replicas
         self.rank = rank
+        self.comm_rank = comm_rank
+        self.comm_size = comm_size
         self.epoch = 0
         if dataset_size > 0:
             self.num_samples = int(math.ceil(dataset_size * 1.0 / self.num_replicas))
@@ -72,24 +75,29 @@ class DistributedSampler(Sampler):
         self.shuffle = shuffle
         self.seed = int(seed)
 
+        self.indices = None
+        g = torch.Generator()
+        g.manual_seed(self.seed + self.epoch)
+        for i in range(0, self.comm_size):
+            indices_rank = torch.randperm(len(self.dataset), generator=g)
+            if i == self.comm_rank:
+                self.indices = indices_rank.tolist()
+
+
     def __iter__(self):
-        if self.shuffle:
-            # deterministically shuffle based on epoch and seed
-            g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
-            indices = torch.randperm(len(self.dataset), generator=g).tolist()
-        else:
-            indices = list(range(len(self.dataset)))
+        if self.shuffle and self.epoch > 0:
+            random.seed(self.seed + self.epoch)
+            tmp_indices = list(range(len(self.dataset)))
+            for i in range(0, self.comm_size):
+                if i == self.comm_rank:
+                    # deterministically shuffle based on epoch and seed
+                    random.shuffle(self.indices)
+                else:
+                    random.shuffle(tmp_indices)
 
-        # add extra samples to make it evenly divisible
-        indices += indices[:(self.total_size - len(indices))]
-        assert len(indices) == self.total_size
-
-        # subsample
-        indices = indices[self.rank:self.total_size:self.num_replicas]
-        assert len(indices) == self.num_samples
-
-        return iter(indices)
+        #if self.comm_rank == 0:
+        #    print(self.indices)
+        return iter(self.indices)
 
     def __len__(self):
         return self.num_samples

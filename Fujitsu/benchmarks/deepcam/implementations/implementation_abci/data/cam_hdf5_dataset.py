@@ -172,7 +172,7 @@ class CamDistributedDataset(Dataset):
 
     # comm_size and comm_rank are local to the given rank
     # global_size and global_rank are global across the entire MPI job
-    def __init__(self, source, statsfile, channels, allow_uneven_distribution = False, shuffle = False, preprocess = True, padding = False, dummy = False, num_local_samples = 0, comm_size = 1, comm_rank = 0, seed = 12345, global_size = 1, global_rank = 0):
+    def __init__(self, source, statsfile, channels, allow_uneven_distribution = False, shuffle = False, preprocess = True, padding = False, dummy = False, num_local_samples = 0, comm_size = 1, comm_rank = 0, seed = 12345, global_size = 1, global_rank = 0, enable_cache = False):
         self.source = source
         self.statsfile = statsfile
         self.channels = channels
@@ -188,6 +188,9 @@ class CamDistributedDataset(Dataset):
         self.global_rank = global_rank
         self.allow_uneven_distribution = allow_uneven_distribution
         self.lock = threading.Lock()
+        self.cache = {}
+        self.enable_cache = enable_cache
+
         assert(num_local_samples == len(self.all_files))
         #print("CamDistributedDataset[{}/{}]: source: {}, num_local_samples: {}".format(global_rank, global_size, self.source, num_local_samples))
         #print("[{}]: {}".format(global_rank, self.all_files))
@@ -233,7 +236,16 @@ class CamDistributedDataset(Dataset):
 
     def __getitem__(self, idx):
         self.lock.acquire()
-        filename = os.path.join(self.source, self.samples[idx])
+        filename = self.samples[idx]
+        if self.enable_cache:
+            if filename in self.cache:
+                data, label, fullname = self.cache[filename]
+                self.lock.release()
+                #if self.comm_rank == 0:
+                #    print("{} has been served from the cache".format(filename))
+                return data, label, fullname
+
+        fullname = os.path.join(self.source, filename)
         self.lock.release()
 
         if self.dummy:
@@ -241,9 +253,9 @@ class CamDistributedDataset(Dataset):
             label = self.label
         else:
             # HDF5?
-            if filename[len(filename) - 2:] == "h5":
+            if fullname[len(fullname) - 2:] == "h5":
                 #load data and project
-                with h5.File(filename, "r") as f:
+                with h5.File(fullname, "r") as f:
                     data = f["climate/data"][..., self.channels]
                     label = f["climate/labels_0"][...]
 
@@ -252,14 +264,20 @@ class CamDistributedDataset(Dataset):
 
                 #preprocess
                 data = self.data_scale * (data - self.data_shift)
-            elif filename[len(filename) - 4:] == "pckl":
-                with open(filename, 'rb') as f:
+            elif fullname[len(fullname) - 4:] == "pckl":
+                with open(fullname, 'rb') as f:
                     data, label = pickle.load(f)
             else:
-                print("error: invalid file format for: {}".format(filename))
+                print("error: invalid file format for: {}".format(fullname))
                 os.exit(1)
 
-        return data, label, filename
+        if self.enable_cache:
+            self.lock.acquire()
+            self.cache[filename] = (data, label, fullname)
+            #if self.comm_rank == 0:
+            #    print("{} has been read to the cache".format(filename))
+            self.lock.release()
+        return data, label, fullname
 
 
     def get_raw_item(self, index:int) -> Tuple[Any, Any, Any]:
@@ -269,26 +287,36 @@ class CamDistributedDataset(Dataset):
         return data, self.samples[index], label
 
 
-    # Replace an item with a new one in the all_files array
+    # Replace an item with a new one in the all_files array and cache contents
     def add_a_item(self, idx:int, filename, label, data):
         if filename[len(filename) - 4:] != "pckl":
             filename += ".pckl"
 
         fullname = os.path.join(self.source, filename)
 
-        with open(fullname, 'wb') as f:
-            pickle.dump((data, label), f)
-            #print("[{}]: added idx: {}, filename: {}".format(self.global_rank, idx, filename))
+        if not self.enable_cache:
+            with open(fullname, 'wb') as f:
+                pickle.dump((data, label), f)
+                #print("[{}]: added idx: {}, filename: {}".format(self.global_rank, idx, filename))
 
         self.lock.acquire()
         self.all_files[idx] = filename
+        if self.enable_cache:
+            self.cache[filename] = (data, label, fullname)
+            #if self.comm_rank == 0:
+            #    print("{} has been added to the cache".format(filename))
         self.lock.release()
 
 
     def remove_an_item(self, index):
         # Remove an item from list but still store the file physically.
         self.lock.acquire()
-        self.samples[index] = None
+        if self.samples[index] != None:
+            if self.enable_cache:
+                del self.cache[self.samples[index]]
+                #if self.comm_rank == 0:
+                #    print("{} has been removed from the cache".format(self.samples[index]))
+            self.samples[index] = None
         self.lock.release()
 
 
@@ -302,8 +330,9 @@ class CamDistributedDataset(Dataset):
             return
         self.lock.release()
 
-        filename = os.path.join(self.source, self.samples[idx])
-        os.remove(filename)
+        if not self.enable_cache:
+            filename = os.path.join(self.source, self.samples[idx])
+            os.remove(filename)
 
         self.remove_an_item(idx)
         #print("[{}]: removed idx: {}, filename: {}".format(self.global_rank, idx, filename))

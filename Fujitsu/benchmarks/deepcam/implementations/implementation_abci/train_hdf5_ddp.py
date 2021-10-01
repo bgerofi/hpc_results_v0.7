@@ -453,7 +453,8 @@ def main(pargs):
                                comm_rank = 0,
                                global_size = comm_size,
                                global_rank = comm_rank,
-                               seed = pargs.seed)
+                               seed = pargs.seed,
+                               enable_cache = (pargs.fraction > 0))
 
     # Sampling happens locally
     distributed_train_sampler = DistributedSampler(train_set,

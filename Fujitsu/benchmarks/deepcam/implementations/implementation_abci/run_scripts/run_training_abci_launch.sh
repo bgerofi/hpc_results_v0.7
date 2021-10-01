@@ -49,9 +49,15 @@ else
   dummy=""
 fi
 
+# Baseline 256 nodes (1024 ranks) schedule
 START_LR=0.0055
+LR_WARMUP=400
+LR_MILESTONES=800
+
 if [ ${total_num_procs} -eq 2048 ]; then
     START_LR=0.011
+    LR_WARMUP=200
+    LR_MILESTONES=400
 fi
 
 run_tag="${run_tag}-LR-${START_LR}"
@@ -72,8 +78,8 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --model_prefix "classifier" \
        --optimizer "LAMB" \
        --start_lr ${START_LR} \
-       --lr_schedule type="multistep",milestones="800",decay_rate="0.1" \
-       --lr_warmup_steps 400 \
+       --lr_schedule type="multistep",milestones="${LR_MILESTONES}",decay_rate="0.1" \
+       --lr_warmup_steps ${LR_WARMUP} \
        --lr_warmup_factor 1. \
        --weight_decay 1e-2 \
        --validation_frequency 100 \

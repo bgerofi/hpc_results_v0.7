@@ -22,8 +22,11 @@ if [ ${local_rank} -eq 0 ]; then
 fi
 
 start_idx=${rank}
-end_idx=2047
-#end_idx=${rank}
+if [ ${nprocs} -gt 16 ]; then
+    end_idx=2047
+else
+    end_idx=${rank}
+fi
 idx_step=${nprocs}
 
 train_local_dir="${local_dir}/train/${rank}/"

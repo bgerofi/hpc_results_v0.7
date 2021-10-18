@@ -34,16 +34,22 @@ else
   fraction=0
 fi
 group_id="gcb50300"
-#group_id="gad50699"
+# ABCI GC
+group_id="gad50726"
 group_id="gad50699"
-runtime="0:30:00"
+runtime="1:00:00"
 
 log_time=`date +%s`
 log_dir=logs
 mkdir -p ${log_dir}
 
+TODAY=$(date +%Y%m%d)
 branch=`git rev-parse --abbrev-ref HEAD`||exit
-out_file=${log_dir}/run_training_abci_${num_nodes}node_${branch}_${log_time}.txt
+SHUFFLING="local_shuffling"
+if [ "${fraction}" != "0" ]; then
+	SHUFFLING="partial_${fraction}_shuffling"
+fi
+out_file=${log_dir}/run_training_abci_${TODAY}-${num_nodes}_nodes_${SHUFFLING}_${log_time}.txt
 
 if [ ${mode} -eq 0 ]; then
   echo "direct data load with full dataset" | tee ${out_file}

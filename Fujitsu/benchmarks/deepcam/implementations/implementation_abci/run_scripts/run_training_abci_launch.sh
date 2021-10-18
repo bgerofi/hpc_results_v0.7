@@ -65,9 +65,9 @@ run_tag="${run_tag}-LR-${START_LR}"
 pin_memory="--pin_memory"
 
 seed=`date +%s`
-seed=42
 # Same seed as https://wandb.ai/bgerofi/DeepCAM-ABCI_GC/runs/20210916-JOB_7940702-256_nodes-partial_0.5_shuffling?workspace=user-bgerofi
 seed=1631765780
+seed=42
 
 ${profile} python3 -u ../train_hdf5_ddp.py \
        --wireup_method "mpi" \

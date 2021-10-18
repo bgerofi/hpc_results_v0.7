@@ -91,7 +91,8 @@ class PartialScheduler():
             self.clean_list.append(self.permutation[idx])
 
             # Recv from ANY
-            buf = bytearray(1<<28) # 256MB buffer (just in case)
+            #buf = bytearray(1<<28) # 256MB buffer (just in case)
+            buf = np.zeros(1<<28, dtype=np.uint8) # 256MB buffer (just in case)
             req = self.comm.irecv(buf, source=MPI.ANY_SOURCE, tag=idx)
             recv_requests.append(req)
 

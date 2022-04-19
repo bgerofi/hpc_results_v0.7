@@ -25,7 +25,8 @@ fi
 
 source /etc/profile.d/modules.sh
 module purge
-module load gcc/9.3.0 python/3.8/3.8.7 openmpi/4.0.5 cuda/11.1/11.1.1 cudnn/8.0/8.0.5 nccl/2.8/2.8.4-1
+#module load gcc/9.3.0 python/3.8/3.8.7 openmpi/4.0.5 cuda/11.1/11.1.1 cudnn/8.0/8.0.5 nccl/2.8/2.8.4-1
+module load gcc/11.2.0 python/3.8/3.8.13 openmpi/4.0.5 cuda/11.1/11.1.1 cudnn/8.0/8.0.5 nccl/2.8/2.8.4-1
 
 num_nodes=$1
 local_dir=${SGE_LOCALDIR}

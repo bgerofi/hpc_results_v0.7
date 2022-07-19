@@ -52,7 +52,7 @@ class DistributedSampler(Sampler):
         ...     train(loader)
     """
 
-    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, dataset_size=-1, comm_size=1, comm_rank=0):
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True, seed=0, dataset_size=-1, comm_size=1, comm_rank=0, importance_sampling_mode="disabled"):
         if num_replicas is None:
             if not dist.is_available():
                 raise RuntimeError("Requires distributed package to be available")
@@ -83,9 +83,45 @@ class DistributedSampler(Sampler):
             if i == self.comm_rank:
                 self.indices = indices_rank.tolist()
 
+        self.importance_sampling_mode = importance_sampling_mode
+        self.importance_scores = []
+        # All samples are important in the first epoch
+        self.important_samples = [True] * len(self.dataset)
+
+    def append_importance(self, idx, importance):
+        self.importance_scores.append((importance, idx))
+
+    def is_sample_important(self, idx):
+        return self.important_samples[idx]
 
     def __iter__(self):
-        if self.shuffle and self.epoch > 0:
+        if self.comm_rank == 0:
+            print("epoch: {}, importance_sampling_mode: {}".format(self.epoch, self.importance_sampling_mode))
+
+        if (self.importance_sampling_mode != "disabled" and self.epoch > 0):
+            self.importance_scores.sort(reverse=True)
+            self.indices = tuple(map(list, zip(*self.importance_scores)))[1]
+            if self.comm_rank == 0:
+                print("epoch: {}, importance_scores: {}".format(self.epoch, self.importance_scores))
+                print("epoch: {}, indices: {}".format(self.epoch, self.indices))
+
+            self.important_samples = [False] * len(self.dataset)
+            if self.importance_sampling_mode == "drop-10perc":
+                for i in range(len(self.indices)):
+                    if i < 0.9 * len(self.dataset):
+                        self.important_samples[self.indices[i]] = True
+            if self.importance_sampling_mode == "drop-20perc":
+                for i in range(len(self.indices)):
+                    if i < 0.8 * len(self.dataset):
+                        self.important_samples[self.indices[i]] = True
+            if self.importance_sampling_mode == "drop-30perc":
+                for i in range(len(self.indices)):
+                    if i < 0.7 * len(self.dataset):
+                        self.important_samples[self.indices[i]] = True
+            self.importance_scores = []
+
+
+        elif self.shuffle and self.epoch > 0:
             random.seed(self.seed + self.epoch)
             tmp_indices = list(range(len(self.dataset)))
             for i in range(0, self.comm_size):

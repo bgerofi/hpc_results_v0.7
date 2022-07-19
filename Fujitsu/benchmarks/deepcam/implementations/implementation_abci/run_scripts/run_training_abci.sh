@@ -1,7 +1,7 @@
 #!/bin/bash -i
 
 if [ $# -lt 1 ]; then
-  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [data_staging (default: on)] [load_debug_data (default: off)] [prof: (default: off)] [fraction: (default 0)]"
+  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [data_staging (default: on)] [load_debug_data (default: off)] [prof: (default: off)] [fraction: (default 0)] [importance: (default: 'disabled')]"
   echo "load_debug_data: {0: no, 1:yes (from files), 2: yes (dummy data)}"
   exit 1
 fi
@@ -111,11 +111,22 @@ else
   fraction=0
 fi
 
+if [ $# -gt 6 ]; then
+  importance=$7
+else
+  importance="disabled"
+fi
+
 if [ ${fraction} == "0" ]; then
 	run_tag="${run_tag}-local_shuffling"
 else
 	run_tag="${run_tag}-partial_${fraction}_shuffling-rand_pairs"
 fi
+
+if [ ${importance} != "disabled" ]; then
+	run_tag="${run_tag}-importance-${importance}"
+fi
+
 echo ${run_tag}
 
 if [ ${debug} -eq 2 ]; then
@@ -180,6 +191,7 @@ mpirun -n ${total_num_procs} ${mpioptions} ./run_training_abci_launch.sh \
   ${debug} \
   ${dummy} \
   ${fraction} \
+  ${importance} \
   ${profile}
 
 rm ~/tmp/${JOB_ID}_hostfile

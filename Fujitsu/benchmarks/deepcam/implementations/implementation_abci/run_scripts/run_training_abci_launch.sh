@@ -17,7 +17,8 @@ run_tag=$9
 debug=${10}
 dummy=${11}
 fraction=${12}
-profile=${13}
+importance=${13}
+profile=${14}
 
 log_dir=./logs
 mkdir -p ${output_dir}
@@ -87,7 +88,7 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --validation_visualization_frequency 0 \
        --logging_frequency 10 \
        --save_frequency 0 \
-       --max_epochs 30 \
+       --max_epochs 35 \
        --amp_opt_level O1 \
        --enable_wandb \
        --wandb_certdir ${HOME} \
@@ -100,4 +101,5 @@ ${profile} python3 -u ../train_hdf5_ddp.py \
        --shuffle_after_epoch \
        --seed ${seed} \
        --fraction ${fraction} \
+       --importance "${importance}" \
        --local_batch_size 2 ${stage_dir} ${pin_memory} ${debug} ${dummy}  |& tee -a ${output_dir}/train_${JOB_ID}.out

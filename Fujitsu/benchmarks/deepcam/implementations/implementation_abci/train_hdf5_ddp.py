@@ -28,6 +28,8 @@ import numpy as np
 import argparse as ap
 import datetime as dt
 import subprocess as sp
+import gc
+import time
 
 # logging
 # wandb
@@ -211,7 +213,7 @@ def main(pargs):
         
             #init db and get config
             resume_flag = pargs.run_tag if pargs.resume_logging else False
-            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_GC', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
+            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_ImpSampl', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
             config = wandb.config
         
             #set general parameters
@@ -234,6 +236,7 @@ def main(pargs):
             config.lr_warmup_steps = pargs.lr_warmup_steps
             config.lr_warmup_factor = pargs.lr_warmup_factor
             config.fraction = pargs.fraction
+            config.importance = pargs.importance
             
             # lr schedule if applicable
             if pargs.lr_schedule:
@@ -454,7 +457,7 @@ def main(pargs):
                                global_size = comm_size,
                                global_rank = comm_rank,
                                seed = pargs.seed,
-                               enable_cache = (pargs.fraction > 0))
+                               enable_cache = True)
 
     # Sampling happens locally
     distributed_train_sampler = DistributedSampler(train_set,
@@ -462,7 +465,8 @@ def main(pargs):
                                                    rank = 0,
                                                    seed = pargs.seed,
                                                    comm_rank = comm_rank,
-                                                   comm_size = comm_size)
+                                                   comm_size = comm_size,
+                                                   importance_sampling_mode = pargs.importance)
 
     train_loader = DataLoader(train_set,
                               pargs.local_batch_size,
@@ -546,19 +550,68 @@ def main(pargs):
 
         send_requests, recv_requests = None, None
 
+        t_iter = 0
+        t_trans = 0
+        t_forward = 0
+        t_loss = 0
+        t_importance = 0
+        t_backward = 0
+        t_update = 0
+        t_eval = 0
+
+        ts_start = time.perf_counter()
         # epoch loop
         for inputs, label, filename in train_loader:
   
             MPI.COMM_WORLD.Barrier()
+            ts_iter = time.perf_counter()
+
             # send to device
             inputs = inputs.to(device)
             label = label.to(device)
 
+            ts_trans = time.perf_counter()
+
             # forward pass
-            outputs = net.forward(inputs)
+            if (pargs.importance != "disabled" and not distributed_train_sampler.is_sample_important(
+                        train_set.filename2idx(os.path.basename(filename[0])))):
+                with torch.no_grad(): 
+                    outputs = net.forward(inputs)
+            else:
+                outputs = net.forward(inputs)
+
+            ts_forward = time.perf_counter()
 
             # Compute loss and average across nodes
-            loss = criterion(outputs, label, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
+            loss, loss_per_inp = criterion(outputs, label, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
+    
+            ts_loss = time.perf_counter()
+
+            if pargs.importance != "disabled":
+                for i in range(len(filename)):
+                    distributed_train_sampler.append_importance(
+                        train_set.filename2idx(os.path.basename(filename[i])),
+                            torch.mean(loss_per_inp[i].detach()).item())
+
+                # Do not do the rest of the iteration if sample is not important
+                if not distributed_train_sampler.is_sample_important(
+                        train_set.filename2idx(os.path.basename(filename[0]))):
+                    step += 1
+                    if pargs.lr_schedule:
+                        current_lr = ph.get_lr(scheduler, pargs.lr_schedule)
+                        scheduler.step()
+
+                    ts_importance = time.perf_counter()
+
+                    t_iter += (ts_iter - ts_start)
+                    t_trans += (ts_trans - ts_iter)
+                    t_forward += (ts_forward - ts_trans)
+                    t_loss += (ts_loss - ts_forward)
+                    t_importance += (ts_importance - ts_loss)
+                    ts_start = time.perf_counter()
+                    continue
+
+            ts_importance = time.perf_counter()
 
             # Backprop
             optimizer.zero_grad()
@@ -567,6 +620,8 @@ def main(pargs):
                     scaled_loss.backward()
             else:
                 loss.backward()
+
+            ts_backward = time.perf_counter()
 
             if send_requests is not None:
                 train_scheduler.synchronize(send_requests, recv_requests)
@@ -579,13 +634,15 @@ def main(pargs):
             torch.cuda.synchronize()
             send_requests, recv_requests = train_scheduler.communicate(step)
             torch.cuda.synchronize()
-
+            
             # step counter
             step += 1
             
             if pargs.lr_schedule:
                 current_lr = ph.get_lr(scheduler, pargs.lr_schedule)
                 scheduler.step()
+            
+            ts_update = time.perf_counter()
 
             #visualize if requested
             if visualize and (step % pargs.training_visualization_frequency == 0) and (comm_rank == 0):
@@ -667,7 +724,7 @@ def main(pargs):
                         outputs_val = net.forward(inputs_val)
 
                         # Compute loss and average across nodes
-                        loss_val = criterion(outputs_val, label_val, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
+                        loss_val, losses_val = criterion(outputs_val, label_val, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
                         loss_sum_val += loss_val
                         
                         #increase counter
@@ -751,6 +808,19 @@ def main(pargs):
                 logger.log_event(key = "target_accuracy_reached", value = pargs.target_iou, metadata = {'epoch_num': epoch+1, 'step_num': step})
                 target_accuracy_reached = True
                 break;
+            
+            ts_eval = time.perf_counter()
+
+            t_iter += (ts_iter - ts_start)
+            t_trans += (ts_trans - ts_iter)
+            t_forward += (ts_forward - ts_trans)
+            t_loss += (ts_loss - ts_forward)
+            t_importance += (ts_importance - ts_loss)
+            t_backward += (ts_backward - ts_importance)
+            t_update += (ts_update - ts_backward)
+            t_eval += (ts_eval - ts_update)
+
+            ts_start = time.perf_counter()
 
         if send_requests is not None:
             train_scheduler.synchronize(send_requests, recv_requests)
@@ -760,6 +830,14 @@ def main(pargs):
         torch.cuda.synchronize()
 
         # log the epoch
+        logger.log_event(key = "t_iter", value = t_iter, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_trans", value = t_trans, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_forward", value = t_forward, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_loss", value = t_loss, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_importance", value = t_importance, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_backward", value = t_backward, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_update", value = t_update, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1
 
@@ -824,6 +902,7 @@ if __name__ == "__main__":
     AP.add_argument("--local_rank", default=0, type=int)
     AP.add_argument("--local_size", default=1, type=int)
     AP.add_argument('--fraction', type=float, default=0.0, help=' Fraction of non-local samples in SpatialLocalSampler. In range of [0,1]. If ratio = 0, it uses local sampling, 1 is global sampling. Default value = 0')
+    AP.add_argument('--importance', type=str, default="disabled", help=' Importance sampling mode (default: disabled)')
     pargs = AP.parse_args()
     
     #run the stuff

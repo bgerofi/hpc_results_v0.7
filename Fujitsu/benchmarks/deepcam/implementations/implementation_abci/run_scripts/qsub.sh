@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# -eq 0 ]; then
-  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [mode (default: 1)] [prof: (default: off)] [fraction: 0]"
+  echo "$0 [num_nodes] [num_procs_per_node (default: 4)] [mode (default: 1)] [prof: (default: off)] [fraction: 0] [importance: (default: 'disabled')]"
   echo "mode:"
   echo " 0: direct data loading with full dataset,"
   echo " 1: data staging with full dataset (default),"
@@ -33,11 +33,18 @@ if [ $# -gt 4 ]; then
 else
   fraction=0
 fi
+if [ $# -gt 5 ]; then
+  importance=$6
+else
+  importance="disabled"
+fi
+
+
 group_id="gcb50300"
 # ABCI GC
 group_id="gad50726"
 group_id="gad50699"
-runtime="1:00:00"
+runtime="2:00:00"
 
 log_time=`date +%s`
 log_dir=logs
@@ -73,6 +80,6 @@ else
 fi
 
 qsub -g ${group_id} -l rt_F=${NUM_JOB_NODES} -l h_rt=${runtime} -o ${out_file} -j y -cwd ./run_training_abci.sh \
-  ${num_nodes} ${num_procs_per_node} ${data_staging} ${debug} ${prof} ${fraction}
+  ${num_nodes} ${num_procs_per_node} ${data_staging} ${debug} ${prof} ${fraction} ${importance}
 
 sleep 1

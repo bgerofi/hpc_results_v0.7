@@ -181,6 +181,8 @@ class CamDistributedDataset(Dataset):
         self.padding = padding
         self.dummy = dummy
         self.all_files = sorted( [ x for x in os.listdir(self.source) if x.endswith('.h5') ] )
+        self.fn2idx = {v: k for k, v in enumerate(self.all_files)}
+        self.fn2imp = {v: [] for k, v in enumerate(self.all_files)}
         self.num_local_samples = num_local_samples
         self.comm_size = comm_size
         self.comm_rank = comm_rank
@@ -228,6 +230,8 @@ class CamDistributedDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    def filename2idx(self, filename):
+        return self.fn2idx[filename]
 
     @property
     def shapes(self):

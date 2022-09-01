@@ -574,6 +574,8 @@ def main(pargs):
 
     # training loop
     while True:
+        ts_start_epoch = time.perf_counter()
+
         # start epoch
         MPI.COMM_WORLD.Barrier()
         logger.log_start(key = "epoch_start", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync=True)
@@ -898,6 +900,7 @@ def main(pargs):
 
         t_forward_dispatch = ts_forward_dispatch - ts_start_forward_dispatch
 
+        ts_end_epoch = time.perf_counter()
         # log the epoch
         logger.log_event(key = "t_forward_dispatch", value = t_forward_dispatch, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_iter", value = t_iter, metadata = {'epoch_num': epoch+1})
@@ -910,6 +913,7 @@ def main(pargs):
         logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_sync_threads", value = t_sync_threads, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "epoch_duration", value = (ts_end_epoch - ts_start_epoch), metadata = {'epoch_num': epoch+1, 'step_num': step})
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1
 

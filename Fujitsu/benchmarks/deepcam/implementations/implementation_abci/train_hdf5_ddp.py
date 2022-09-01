@@ -23,6 +23,11 @@
 # Basics
 import sys
 import os
+import threading
+try:
+	import Queue
+except ImportError:
+	import queue as Queue
 import math
 import numpy as np
 import argparse as ap
@@ -105,6 +110,19 @@ def printr(msg, rank=0):
     #if hvd.rank() == rank:
     if hvd.rank() == 0:
         print(msg)
+
+def forward_thread_fn(req, resp, net, __none):
+    time.sleep(1)
+
+    while True:
+        inputs = req.get()
+        if inputs is None:
+            return
+
+        with torch.no_grad():
+            outputs = net.forward(inputs)
+
+        resp.put((inputs, outputs))
 
 
 #main function
@@ -255,6 +273,24 @@ def main(pargs):
         net.cuda()
     else:
         net.to(device)
+
+    net_cpu = deeplab_xception.DeepLabv3_plus(n_input = n_input_channels, 
+                                          n_classes = n_output_channels, 
+                                          os=16, pretrained=False, 
+                                          rank = comm_rank)
+    net_cpu.to(torch.device("cpu"))
+    
+    # Loss compute threads
+    forward_reqs = Queue.Queue()
+    forward_resp = Queue.Queue()
+    forward_threads = []
+    for i in range(26):
+        thread = threading.Thread(
+            target = forward_thread_fn,
+            args = (forward_reqs, forward_resp, net_cpu, None))
+        thread.daemon = True
+        thread.start()
+        forward_threads.append(thread)
 
     #select loss
     loss_pow = pargs.loss_weight_pow
@@ -550,6 +586,7 @@ def main(pargs):
 
         send_requests, recv_requests = None, None
 
+        t_forward_dispatch = 0
         t_iter = 0
         t_trans = 0
         t_forward = 0
@@ -559,12 +596,33 @@ def main(pargs):
         t_update = 0
         t_eval = 0
 
-        ts_start = time.perf_counter()
+        ts_start_forward_dispatch = time.perf_counter()
         # epoch loop
+
+		# Async forward eval dispatch
+        nr_inputs = 0
+        for inputs, label, filename in train_loader:
+            inputs_cpu = inputs.detach()
+            forward_reqs.put(inputs_cpu)
+            nr_inputs += 1
+            #for input_cpu in inputs_cpu:
+            #	forward_reqs.put(torch.unsqueeze(input_cpu, dim=0))
+            #	nr_inputs += 1
+
+        ts_forward_dispatch = time.perf_counter()
+
+        ts_start = time.perf_counter()
+
         for inputs, label, filename in train_loader:
   
             MPI.COMM_WORLD.Barrier()
             ts_iter = time.perf_counter()
+
+            #with torch.no_grad():
+            #    outputs_cpu = net_cpu.forward(inputs_cpu)
+            #ts_forward_cpu = time.perf_counter()
+            #if comm_rank == 0:
+            #    print("CPU inference time: {}".format(ts_forward_cpu - ts_start))
 
             # send to device
             inputs = inputs.to(device)
@@ -820,6 +878,7 @@ def main(pargs):
             t_update += (ts_update - ts_backward)
             t_eval += (ts_eval - ts_update)
 
+
             ts_start = time.perf_counter()
 
         if send_requests is not None:
@@ -829,7 +888,18 @@ def main(pargs):
         train_scheduler.clean_local_storage()
         torch.cuda.synchronize()
 
+        # Get loss compute threads' results
+        for i in range(nr_inputs):
+            (inputs, outputs) = forward_resp.get()
+        if comm_rank == 0:
+            print("Got {} loss evaluation results..".format(nr_inputs))
+        
+        t_sync_threads = (time.perf_counter() - ts_start)
+
+        t_forward_dispatch = ts_forward_dispatch - ts_start_forward_dispatch
+
         # log the epoch
+        logger.log_event(key = "t_forward_dispatch", value = t_forward_dispatch, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_iter", value = t_iter, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_trans", value = t_trans, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_forward", value = t_forward, metadata = {'epoch_num': epoch+1})
@@ -838,6 +908,8 @@ def main(pargs):
         logger.log_event(key = "t_backward", value = t_backward, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_update", value = t_update, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_sync_threads", value = t_sync_threads, metadata = {'epoch_num': epoch+1})
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1
 

@@ -111,18 +111,25 @@ def printr(msg, rank=0):
     if hvd.rank() == 0:
         print(msg)
 
-def forward_thread_fn(req, resp, net, __none):
+def forward_thread_fn(req, resp, net, criterion, class_weights, fpw_1, fpw_2, distributed_train_sampler, train_set, __none):
     time.sleep(1)
 
     while True:
-        inputs = req.get()
+        inputs, label, filename = req.get()
         if inputs is None:
             return
 
         with torch.no_grad():
             outputs = net.forward(inputs)
 
-        resp.put((inputs, outputs))
+        loss, loss_per_inp = criterion(outputs, label, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
+        for i in range(len(filename)):
+            distributed_train_sampler.append_importance(
+                train_set.filename2idx(os.path.basename(filename[i])),
+                    torch.mean(loss_per_inp[i]).item())
+
+        # Let the main thread know that we are done with this sample
+        resp.put((inputs, label, filename, outputs))
 
 
 #main function
@@ -231,7 +238,7 @@ def main(pargs):
         
             #init db and get config
             resume_flag = pargs.run_tag if pargs.resume_logging else False
-            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_ImpSampl', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
+            wandb.init(entity = wblogin, project = 'DeepCAM-ABCI_ImportanceSampling', name = pargs.run_tag, id = pargs.run_tag, resume = resume_flag)
             config = wandb.config
         
             #set general parameters
@@ -280,18 +287,6 @@ def main(pargs):
                                           rank = comm_rank)
     net_cpu.to(torch.device("cpu"))
     
-    # Loss compute threads
-    forward_reqs = Queue.Queue()
-    forward_resp = Queue.Queue()
-    forward_threads = []
-    for i in range(26):
-        thread = threading.Thread(
-            target = forward_thread_fn,
-            args = (forward_reqs, forward_resp, net_cpu, None))
-        thread.daemon = True
-        thread.start()
-        forward_threads.append(thread)
-
     #select loss
     loss_pow = pargs.loss_weight_pow
     #some magic numbers
@@ -558,6 +553,20 @@ def main(pargs):
                                    #persistent_workers = (pargs.max_inter_threads > 0)
                                    )
 
+
+    # Loss compute threads
+    forward_reqs = Queue.Queue()
+    forward_resp = Queue.Queue()
+    forward_threads = []
+    for i in range(10):
+        thread = threading.Thread(
+            target = forward_thread_fn,
+            args = (forward_reqs, forward_resp, net_cpu, losses.fp_loss_cpu, class_weights, fpw_1, fpw_2, distributed_train_sampler, train_set, None))
+        thread.daemon = True
+        thread.start()
+        forward_threads.append(thread)
+
+
     MPI.COMM_WORLD.Barrier()
     if hvd.rank() == 0:
         print("DataLoaders are ready on all ranks.")
@@ -571,6 +580,13 @@ def main(pargs):
         logger.log_event(key = "eval_samples", value = pargs.num_global_validation_samples)
 
     target_accuracy_reached = False
+
+    # Before actual training, do a round of input caching
+    nr_inputs = 0
+    for inputs, label, filename in train_loader:
+        nr_inputs += 1
+    logger.log_event(key = "train_mini_batches", value = nr_inputs)
+
 
     # training loop
     while True:
@@ -603,10 +619,11 @@ def main(pargs):
 
 		# Async forward eval dispatch
         nr_inputs = 0
-        for inputs, label, filename in train_loader:
-            inputs_cpu = inputs.detach()
-            forward_reqs.put(inputs_cpu)
-            nr_inputs += 1
+        #for inputs, label, filename in train_loader:
+        #    inputs_cpu = inputs.detach()
+        #    forward_reqs.put(inputs_cpu)
+        #    nr_inputs += 1
+
             #for input_cpu in inputs_cpu:
             #	forward_reqs.put(torch.unsqueeze(input_cpu, dim=0))
             #	nr_inputs += 1
@@ -619,32 +636,58 @@ def main(pargs):
   
             MPI.COMM_WORLD.Barrier()
             ts_iter = time.perf_counter()
-
-            #with torch.no_grad():
-            #    outputs_cpu = net_cpu.forward(inputs_cpu)
-            #ts_forward_cpu = time.perf_counter()
-            #if comm_rank == 0:
-            #    print("CPU inference time: {}".format(ts_forward_cpu - ts_start))
-
-            # send to device
-            inputs = inputs.to(device)
-            label = label.to(device)
-
-            ts_trans = time.perf_counter()
+            loss_was_small = False
 
             # forward pass
+            # Importance sampling?
             if (pargs.importance != "disabled" and not distributed_train_sampler.is_sample_important(
                         train_set.filename2idx(os.path.basename(filename[0])))):
-                with torch.no_grad(): 
-                    outputs = net.forward(inputs)
+                # Do we do it on the CPU?
+                if nr_inputs < 0:
+                    inputs_cpu = inputs.detach()
+                    forward_reqs.put((inputs_cpu, label, filename))
+                    nr_inputs += 1
+
+                    ts_trans = time.perf_counter()
+
+                    # For CPU processed samples we bail out the iteration here
+                    step += 1
+                    if pargs.lr_schedule:
+                        current_lr = ph.get_lr(scheduler, pargs.lr_schedule)
+                        scheduler.step()
+
+                    ts_importance = time.perf_counter()
+
+                    t_iter += (ts_iter - ts_start)
+                    t_trans += (ts_trans - ts_iter)
+                    t_importance += (ts_importance - ts_trans)
+                    ts_start = time.perf_counter()
+                    continue
+
+                else:
+                    # send to device
+                    inputs = inputs.to(device)
+                    label = label.to(device)
+                    ts_trans = time.perf_counter()
+
+                    with torch.no_grad(): 
+                        outputs = net.forward(inputs)
+
             else:
+                # send to device
+                inputs = inputs.to(device)
+                label = label.to(device)
+                ts_trans = time.perf_counter()
+
                 outputs = net.forward(inputs)
 
             ts_forward = time.perf_counter()
 
             # Compute loss and average across nodes
             loss, loss_per_inp = criterion(outputs, label, weight=class_weights, fpw_1=fpw_1, fpw_2=fpw_2)
-    
+            if loss < 1:
+                loss_was_small = True
+
             ts_loss = time.perf_counter()
 
             if pargs.importance != "disabled":
@@ -892,11 +935,25 @@ def main(pargs):
 
         # Get loss compute threads' results
         for i in range(nr_inputs):
-            (inputs, outputs) = forward_resp.get()
+            inputs, label, filename, outputs = forward_resp.get()
+            '''
+            loss, loss_per_inp = criterion(outputs, label, weight=class_weights,
+                                            fpw_1=fpw_1, fpw_2=fpw_2)
+            for i in range(len(filename)):
+                distributed_train_sampler.append_importance(
+                    train_set.filename2idx(os.path.basename(filename[i])),
+                        torch.mean(loss_per_inp[i]).item())
+            '''
+
         if comm_rank == 0:
             print("Got {} loss evaluation results..".format(nr_inputs))
         
-        t_sync_threads = (time.perf_counter() - ts_start)
+        ts_sync_threads = time.perf_counter()
+        t_sync_threads = ts_sync_threads - ts_start
+
+        net_cpu.load_state_dict(net.state_dict())
+        ts_update_cpu_net = time.perf_counter()
+        t_update_cpu_net = ts_update_cpu_net - ts_sync_threads
 
         t_forward_dispatch = ts_forward_dispatch - ts_start_forward_dispatch
 
@@ -913,6 +970,7 @@ def main(pargs):
         logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_eval", value = t_eval, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "t_sync_threads", value = t_sync_threads, metadata = {'epoch_num': epoch+1})
+        logger.log_event(key = "t_update_cpu_net", value = t_update_cpu_net, metadata = {'epoch_num': epoch+1})
         logger.log_event(key = "epoch_duration", value = (ts_end_epoch - ts_start_epoch), metadata = {'epoch_num': epoch+1, 'step_num': step})
         logger.log_end(key = "epoch_stop", metadata = {'epoch_num': epoch+1, 'step_num': step}, sync = True)
         epoch += 1

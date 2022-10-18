@@ -7,6 +7,7 @@ import random
 #from . import Sampler
 from torch.utils.data import Sampler
 import torch.distributed as dist
+import multiprocessing
 
 
 class DistributedSampler(Sampler):
@@ -85,11 +86,14 @@ class DistributedSampler(Sampler):
 
         self.importance_sampling_mode = importance_sampling_mode
         self.importance_scores = []
+        self.importance_scores_lock = multiprocessing.Lock()
         # All samples are important in the first epoch
         self.important_samples = [True] * len(self.dataset)
 
     def append_importance(self, idx, importance):
+        self.importance_scores_lock.acquire()
         self.importance_scores.append((importance, idx))
+        self.importance_scores_lock.release()
 
     def is_sample_important(self, idx):
         return self.important_samples[idx]
@@ -100,24 +104,45 @@ class DistributedSampler(Sampler):
 
         if (self.importance_sampling_mode != "disabled" and self.epoch > 0):
             self.importance_scores.sort(reverse=True)
-            self.indices = tuple(map(list, zip(*self.importance_scores)))[1]
+            tmp_indices = tuple(map(list, zip(*self.importance_scores)))[1]
+
+            self.important_samples = [False] * len(self.dataset)
+            # Mark important samples based on drop-off percentage
+            # and move unimportant ones to the front of the list
+            indices = []
+            if self.importance_sampling_mode == "drop-10perc":
+                for i in range(len(tmp_indices)):
+                    if i < 0.9 * len(self.dataset):
+                        self.important_samples[tmp_indices[i]] = True
+                        indices.append(tmp_indices[i])
+                    else:
+                        indices.insert(0, tmp_indices[i])
+            if self.importance_sampling_mode == "drop-15perc":
+                for i in range(len(tmp_indices)):
+                    if i < 0.85 * len(self.dataset):
+                        self.important_samples[tmp_indices[i]] = True
+                        indices.append(tmp_indices[i])
+                    else:
+                        indices.insert(0, tmp_indices[i])
+            if self.importance_sampling_mode == "drop-20perc":
+                for i in range(len(tmp_indices)):
+                    if i < 0.8 * len(self.dataset):
+                        self.important_samples[tmp_indices[i]] = True
+                        indices.append(tmp_indices[i])
+                    else:
+                        indices.insert(0, tmp_indices[i])
+            if self.importance_sampling_mode == "drop-30perc":
+                for i in range(len(tmp_indices)):
+                    if i < 0.7 * len(self.dataset):
+                        self.important_samples[tmp_indices[i]] = True
+                        indices.append(tmp_indices[i])
+                    else:
+                        indices.insert(0, tmp_indices[i])
+
+            self.indices = indices
             if self.comm_rank == 0:
                 print("epoch: {}, importance_scores: {}".format(self.epoch, self.importance_scores))
                 print("epoch: {}, indices: {}".format(self.epoch, self.indices))
-
-            self.important_samples = [False] * len(self.dataset)
-            if self.importance_sampling_mode == "drop-10perc":
-                for i in range(len(self.indices)):
-                    if i < 0.9 * len(self.dataset):
-                        self.important_samples[self.indices[i]] = True
-            if self.importance_sampling_mode == "drop-20perc":
-                for i in range(len(self.indices)):
-                    if i < 0.8 * len(self.dataset):
-                        self.important_samples[self.indices[i]] = True
-            if self.importance_sampling_mode == "drop-30perc":
-                for i in range(len(self.indices)):
-                    if i < 0.7 * len(self.dataset):
-                        self.important_samples[self.indices[i]] = True
             self.importance_scores = []
 
 

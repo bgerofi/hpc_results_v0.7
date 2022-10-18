@@ -26,7 +26,8 @@ mkdir -p ${output_dir}
 rank=${OMPI_COMM_WORLD_RANK}
 total_num_procs=${OMPI_COMM_WORLD_SIZE}
 
-export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS=2
+#export OMP_NUM_THREADS=1
 
 if [ ${rank} -eq 0 ]; then
   cp run_training_abci_launch.sh ${log_dir}/run_training_abci_launch_${JOB_ID}.sh

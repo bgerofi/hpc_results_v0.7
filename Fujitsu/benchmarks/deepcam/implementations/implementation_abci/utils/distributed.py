@@ -8,6 +8,8 @@ import random
 from torch.utils.data import Sampler
 import torch.distributed as dist
 import multiprocessing
+import pandas as pd
+from parse import parse
 
 
 class DistributedSampler(Sampler):
@@ -89,6 +91,7 @@ class DistributedSampler(Sampler):
         self.importance_scores_lock = multiprocessing.Lock()
         # All samples are important in the first epoch
         self.important_samples = [True] * len(self.dataset)
+        self.loss_df = None
 
     def append_importance(self, idx, importance):
         self.importance_scores_lock.acquire()
@@ -104,43 +107,57 @@ class DistributedSampler(Sampler):
 
         if (self.importance_sampling_mode != "disabled" and self.epoch > 0):
             self.importance_scores.sort(reverse=True)
-            tmp_indices = tuple(map(list, zip(*self.importance_scores)))[1]
+            importance_tuple = tuple(map(list, zip(*self.importance_scores)))
+            tmp_losses = importance_tuple[0]
+            tmp_indices = importance_tuple[1]
+            drop_ratio = 0.0
 
             self.important_samples = [False] * len(self.dataset)
             # Mark important samples based on drop-off percentage
             # and move unimportant ones to the front of the list
             indices = []
-            if self.importance_sampling_mode == "drop-10perc":
+
+            # Figure out the ratio to drop
+            for s in self.importance_sampling_mode.split("+"):
+                r = parse("drop-{:d}perc", s)
+                if r:
+                    drop_ratio = (float(r[0]) / 100)
+
+            if drop_ratio > 0.0:
                 for i in range(len(tmp_indices)):
-                    if i < 0.9 * len(self.dataset):
-                        self.important_samples[tmp_indices[i]] = True
-                        indices.append(tmp_indices[i])
-                    else:
-                        indices.insert(0, tmp_indices[i])
-            if self.importance_sampling_mode == "drop-15perc":
-                for i in range(len(tmp_indices)):
-                    if i < 0.85 * len(self.dataset):
-                        self.important_samples[tmp_indices[i]] = True
-                        indices.append(tmp_indices[i])
-                    else:
-                        indices.insert(0, tmp_indices[i])
-            if self.importance_sampling_mode == "drop-20perc":
-                for i in range(len(tmp_indices)):
-                    if i < 0.8 * len(self.dataset):
-                        self.important_samples[tmp_indices[i]] = True
-                        indices.append(tmp_indices[i])
-                    else:
-                        indices.insert(0, tmp_indices[i])
-            if self.importance_sampling_mode == "drop-30perc":
-                for i in range(len(tmp_indices)):
-                    if i < 0.7 * len(self.dataset):
+                    if i < (1.0 - drop_ratio) * len(self.dataset):
                         self.important_samples[tmp_indices[i]] = True
                         indices.append(tmp_indices[i])
                     else:
                         indices.insert(0, tmp_indices[i])
 
+            # Baseline behavior (dummy) mode for loss logging, all samples important
+            if self.importance_sampling_mode == "loss-logger":
+                random.seed(self.seed + self.epoch)
+                dummy_indices = list(range(len(self.dataset)))
+                for i in range(0, self.comm_size):
+                    if i == self.comm_rank:
+                        # deterministically shuffle based on epoch and seed
+                        random.shuffle(self.indices)
+                    else:
+                        random.shuffle(dummy_indices)
+                indices = self.indices
+                self.important_samples = [True] * len(self.dataset)
+                filenames = [self.dataset.samples[k] for k in tmp_indices]
+                epoch_loss_df = pd.DataFrame.from_dict({
+                    "Rank": [self.comm_rank] * len(tmp_indices),
+                    "Filename": filenames,
+                    "Sample_ID": tmp_indices,
+                    "Epoch": [self.epoch] * len(tmp_indices),
+                    "Loss": tmp_losses})
+                self.loss_df = pd.concat([self.loss_df, epoch_loss_df], ignore_index=True)
+                if self.epoch >= 29:
+                    self.loss_df.to_feather("losses-rank-%04d.feather" % self.comm_rank)
+
+
             self.indices = indices
             if self.comm_rank == 0:
+                print("epoch: {}, drop_ratio: {}".format(self.epoch, drop_ratio))
                 print("epoch: {}, importance_scores: {}".format(self.epoch, self.importance_scores))
                 print("epoch: {}, indices: {}".format(self.epoch, self.indices))
             self.importance_scores = []

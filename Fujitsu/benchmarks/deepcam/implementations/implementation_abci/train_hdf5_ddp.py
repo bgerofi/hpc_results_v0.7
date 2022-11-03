@@ -35,6 +35,7 @@ import datetime as dt
 import subprocess as sp
 import gc
 import time
+from parse import parse
 
 # logging
 # wandb
@@ -137,6 +138,22 @@ def main(pargs):
 
     # this should be global
     global have_wandb
+
+    # Determine if using importance samping and LR adjustment
+    importance_adjustLR = False
+    importance_drop_ratio = 0.0
+    if pargs.importance != "disabled":
+        for s in pargs.importance.split("+"):
+            if s == "adjustLR":
+                importance_adjustLR = True
+                continue
+
+            r = parse("drop-{:d}perc", s)
+            if r:
+                importance_drop_ratio = (float(r[0]) / 100)
+
+    if importance_adjustLR and pargs.start_lr > 0:
+        pargs.start_lr = pargs.start_lr * (1.0 / (1.0 - importance_drop_ratio))
 
     hvd.init()
     comm_rank = hvd.rank()
@@ -587,7 +604,6 @@ def main(pargs):
         nr_inputs += 1
     logger.log_event(key = "train_mini_batches", value = nr_inputs)
 
-
     # training loop
     while True:
         ts_start_epoch = time.perf_counter()
@@ -732,6 +748,7 @@ def main(pargs):
             # Normalize gradients by L2 norm of gradient of the entire model
             if not have_apex and pargs.optimizer == "LAMB":
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+
             optimizer.step()
 
             torch.cuda.synchronize()
@@ -799,6 +816,7 @@ def main(pargs):
             # validation step if desired
             #if (step % pargs.validation_frequency == 0):
             # validation in each epoch
+            iou_avg_val = 0
             if (eval_epoch != epoch):
                 eval_epoch = epoch
                 logger.log_start(key = "eval_start", metadata = {'epoch_num': epoch+1})
